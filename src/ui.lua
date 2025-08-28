@@ -4,6 +4,7 @@
 local ui = {}
 local suit = require("lib.suit")
 local lume = require("lib.lume")
+local constants = require("src.constants")
 
 -- UI state
 local uiState = {
@@ -16,10 +17,10 @@ local uiState = {
         messages = {},
         visible = true,
         maxMessages = 50,
-        x = 10,
+        x = 10 * constants.UI_SCALE,
         y = 0, -- Will be set dynamically
-        width = 400,
-        height = 150
+        width = 400 * constants.UI_SCALE,
+        height = 150 * constants.UI_SCALE
     }
 }
 
@@ -29,7 +30,7 @@ function ui.init()
     ui.createTheme()
     
     -- Position chat window at bottom left
-    uiState.chatWindow.y = love.graphics.getHeight() - uiState.chatWindow.height - 10
+    uiState.chatWindow.y = love.graphics.getHeight() - uiState.chatWindow.height - 10 * constants.UI_SCALE
 end
 
 -- Create a custom theme for the RPG
@@ -162,79 +163,159 @@ function ui.drawWindow(window)
     end
 end
 
--- Create a health bar
+-- Unified bar renderer with visual enhancements
+function ui.drawBar(x, y, w, h, current, max, label, barType, options)
+    local colors = uiState.theme.colors
+    options = options or {}
+
+    -- Default settings based on bar type
+    local barColors = {
+        health = colors.health,
+        mana = colors.mana,
+        stamina = colors.stamina
+    }
+
+    local fillColor = barColors[barType] or colors.health
+    local percentage = lume.clamp(current / max, 0, 1)
+    local cornerRadius = options.cornerRadius or math.min(w, h) * 0.15
+    local segments = options.segments or 10
+    local animate = options.animate ~= false  -- Default to true
+
+    -- Animation state (smooth value lerping)
+    local animKey = string.format("%s_%s", barType, label or "default")
+    if not uiState.barAnimations then uiState.barAnimations = {} end
+    if not uiState.barAnimations[animKey] then
+        uiState.barAnimations[animKey] = { current = percentage, target = percentage, velocity = 0 }
+    end
+
+    local anim = uiState.barAnimations[animKey]
+    anim.target = percentage
+
+    -- Smooth animation towards target
+    if animate and anim.current ~= anim.target then
+        local dt = love.timer.getDelta()
+        local diff = anim.target - anim.current
+        anim.velocity = anim.velocity + diff * dt * 8  -- Spring-like acceleration
+        anim.velocity = anim.velocity * 0.8  -- Damping
+        anim.current = anim.current + anim.velocity * dt
+        anim.current = lume.clamp(anim.current, 0, 1)
+    else
+        anim.current = anim.target
+    end
+
+    local displayPercentage = anim.current
+
+    -- Draw background with rounded corners
+    love.graphics.setColor(0.15, 0.15, 0.15, 0.9)
+    ui.drawRoundedRect(x, y, w, h, cornerRadius)
+
+    -- Draw inner shadow
+    love.graphics.setColor(0, 0, 0, 0.3)
+    ui.drawRoundedRect(x + 2, y + 2, w - 4, h - 4, cornerRadius * 0.7)
+
+    -- Draw fill with gradient
+    ui.drawGradientBar(x + 2, y + 2, w - 4, h - 4, displayPercentage, fillColor, cornerRadius * 0.7)
+
+    -- Draw segment ticks
+    if segments > 1 then
+        love.graphics.setColor(1, 1, 1, 0.3)
+        love.graphics.setLineWidth(1)
+        local segmentWidth = (w - 4) / segments
+        for i = 1, segments - 1 do
+            local tickX = x + 2 + i * segmentWidth
+            love.graphics.line(tickX, y + 4, tickX, y + h - 4)
+        end
+    end
+
+    -- Draw damage/heal highlights
+    if options.showHighlights and anim.velocity ~= 0 then
+        local highlightAlpha = math.abs(anim.velocity) * 2
+        if anim.velocity > 0 then
+            -- Healing highlight (green)
+            love.graphics.setColor(0, 1, 0, highlightAlpha * 0.5)
+        else
+            -- Damage highlight (red)
+            love.graphics.setColor(1, 0, 0, highlightAlpha * 0.5)
+        end
+        ui.drawRoundedRect(x + 2, y + 2, (w - 4) * displayPercentage, h - 4, cornerRadius * 0.7)
+    end
+
+    -- Draw border with rounded corners
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(x, y, w, h, cornerRadius)
+
+    -- Draw text
+    if label then
+        love.graphics.setColor(colors.text)
+        local text = string.format("%s: %d/%d", label, current, max)
+        love.graphics.printf(text, x, y + (h - 14) / 2, w, "center")
+    end
+end
+
+-- Helper function to draw rounded rectangles
+function ui.drawRoundedRect(x, y, w, h, radius)
+    local segments = 16
+    love.graphics.rectangle("fill", x + radius, y, w - 2 * radius, h)
+    love.graphics.rectangle("fill", x, y + radius, radius, h - 2 * radius)
+    love.graphics.rectangle("fill", x + w - radius, y + radius, radius, h - 2 * radius)
+
+    -- Draw corners
+    love.graphics.arc("fill", x + radius, y + radius, radius, math.pi, math.pi * 1.5, segments)
+    love.graphics.arc("fill", x + w - radius, y + radius, radius, math.pi * 1.5, math.pi * 2, segments)
+    love.graphics.arc("fill", x + w - radius, y + h - radius, radius, 0, math.pi * 0.5, segments)
+    love.graphics.arc("fill", x + radius, y + h - radius, radius, math.pi * 0.5, math.pi, segments)
+end
+
+-- Helper function to draw rounded rectangle outline
+function ui.drawRoundedRectOutline(x, y, w, h, radius)
+    local segments = 16
+
+    -- Draw straight lines
+    love.graphics.line(x + radius, y, x + w - radius, y)  -- Top
+    love.graphics.line(x + radius, y + h, x + w - radius, y + h)  -- Bottom
+    love.graphics.line(x, y + radius, x, y + h - radius)  -- Left
+    love.graphics.line(x + w, y + radius, x + w, y + h - radius)  -- Right
+
+    -- Draw corner arcs
+    love.graphics.arc("line", x + radius, y + radius, radius, math.pi, math.pi * 1.5, segments)
+    love.graphics.arc("line", x + w - radius, y + radius, radius, math.pi * 1.5, math.pi * 2, segments)
+    love.graphics.arc("line", x + w - radius, y + h - radius, radius, 0, math.pi * 0.5, segments)
+    love.graphics.arc("line", x + radius, y + h - radius, radius, math.pi * 0.5, math.pi, segments)
+end
+
+-- Helper function to draw gradient bar
+function ui.drawGradientBar(x, y, w, h, percentage, color, radius)
+    local fillWidth = w * percentage
+
+    -- Create gradient effect
+    for i = 0, fillWidth, 2 do
+        local alpha = 0.8 + 0.2 * (i / fillWidth)  -- Gradient from darker to lighter
+        love.graphics.setColor(color[1], color[2], color[3], alpha)
+        local sliceWidth = math.min(2, fillWidth - i)
+        if sliceWidth > 0 then
+            love.graphics.rectangle("fill", x + i, y, sliceWidth, h)
+        end
+    end
+
+    -- Add gloss effect
+    love.graphics.setColor(1, 1, 1, 0.2)
+    love.graphics.rectangle("fill", x, y, fillWidth * 0.8, h * 0.3)
+end
+
+-- Create a health bar (legacy wrapper)
 function ui.drawHealthBar(x, y, w, h, current, max, label)
-    local colors = uiState.theme.colors
-    local percentage = lume.clamp(current / max, 0, 1)
-    
-    -- Background
-    love.graphics.setColor(0.2, 0.2, 0.2, 0.8)
-    love.graphics.rectangle("fill", x, y, w, h)
-    
-    -- Health fill
-    love.graphics.setColor(colors.health)
-    love.graphics.rectangle("fill", x, y, w * percentage, h)
-    
-    -- Border
-    love.graphics.setColor(colors.border)
-    love.graphics.rectangle("line", x, y, w, h)
-    
-    -- Text
-    if label then
-        love.graphics.setColor(colors.text)
-        local text = string.format("%s: %d/%d", label, current, max)
-        love.graphics.printf(text, x, y + (h - 14) / 2, w, "center")
-    end
+    ui.drawBar(x, y, w, h, current, max, label, "health", {showHighlights = true})
 end
 
--- Create a mana bar
+-- Create a mana bar (legacy wrapper)
 function ui.drawManaBar(x, y, w, h, current, max, label)
-    local colors = uiState.theme.colors
-    local percentage = lume.clamp(current / max, 0, 1)
-    
-    -- Background
-    love.graphics.setColor(0.2, 0.2, 0.2, 0.8)
-    love.graphics.rectangle("fill", x, y, w, h)
-    
-    -- Mana fill
-    love.graphics.setColor(colors.mana)
-    love.graphics.rectangle("fill", x, y, w * percentage, h)
-    
-    -- Border
-    love.graphics.setColor(colors.border)
-    love.graphics.rectangle("line", x, y, w, h)
-    
-    -- Text
-    if label then
-        love.graphics.setColor(colors.text)
-        local text = string.format("%s: %d/%d", label, current, max)
-        love.graphics.printf(text, x, y + (h - 14) / 2, w, "center")
-    end
+    ui.drawBar(x, y, w, h, current, max, label, "mana", {showHighlights = true})
 end
 
--- Create a stamina bar
+-- Create a stamina bar (legacy wrapper)
 function ui.drawStaminaBar(x, y, w, h, current, max, label)
-    local colors = uiState.theme.colors
-    local percentage = lume.clamp(current / max, 0, 1)
-    
-    -- Background
-    love.graphics.setColor(0.2, 0.2, 0.2, 0.8)
-    love.graphics.rectangle("fill", x, y, w, h)
-    
-    -- Stamina fill
-    love.graphics.setColor(colors.stamina)
-    love.graphics.rectangle("fill", x, y, w * percentage, h)
-    
-    -- Border
-    love.graphics.setColor(colors.border)
-    love.graphics.rectangle("line", x, y, w, h)
-    
-    -- Text
-    if label then
-        love.graphics.setColor(colors.text)
-        local text = string.format("%s: %.0f/%.0f", label, current, max)
-        love.graphics.printf(text, x, y + (h - 14) / 2, w, "center")
-    end
+    ui.drawBar(x, y, w, h, current, max, label, "stamina", {showHighlights = true})
 end
 
 -- Create a tooltip

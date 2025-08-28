@@ -14,7 +14,7 @@ function hud.draw(player, gameState)
     local barHeight = constants.HUD_BAR_HEIGHT
     local spacing = constants.HUD_BAR_SPACING
     local startY = constants.HUD_START_Y
-    local barX = 10
+    local barX = constants.HUD_MARGIN_X
 
     -- Use the new UI system for better-looking bars
     ui.drawHealthBar(barX, startY, barWidth, barHeight, player.health, player.maxHealth, "Health")
@@ -26,7 +26,7 @@ function hud.draw(player, gameState)
 
     -- Show inventory toggle hint (bottom left)
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("Press TAB for Inventory", 10, love.graphics.getHeight() - 25)
+    love.graphics.print("Press TAB for Inventory", constants.HUD_MARGIN_X, love.graphics.getHeight() - 25 * constants.UI_SCALE)
 
     -- Draw enemy tooltip (top center)
     local tooltipTarget = hud.getTooltipTarget(gameState)
@@ -79,11 +79,11 @@ function hud.drawEnemyTooltip(enemy)
     local screenWidth = love.graphics.getWidth()
     local screenHeight = love.graphics.getHeight()
 
-    -- Tooltip dimensions
-    local tooltipWidth = 250
-    local tooltipHeight = 60
+    -- Tooltip dimensions (scaled)
+    local tooltipWidth = 250 * constants.UI_SCALE
+    local tooltipHeight = 60 * constants.UI_SCALE
     local tooltipX = (screenWidth - tooltipWidth) / 2
-    local tooltipY = 20
+    local tooltipY = 20 * constants.UI_SCALE
 
     -- Tooltip background
     love.graphics.setColor(0, 0, 0, 0.8)
@@ -104,11 +104,11 @@ function hud.drawEnemyTooltip(enemy)
     local nameX = tooltipX + (tooltipWidth - nameWidth) / 2
     love.graphics.print(nameText, nameX, tooltipY + 8)
 
-    -- Health bar
-    local barWidth = 200
-    local barHeight = 12
+    -- Health bar (scaled)
+    local barWidth = 200 * constants.UI_SCALE
+    local barHeight = 12 * constants.UI_SCALE
     local barX = tooltipX + (tooltipWidth - barWidth) / 2
-    local barY = tooltipY + 30
+    local barY = tooltipY + 30 * constants.UI_SCALE
 
     -- Health bar background
     love.graphics.setColor(0.3, 0.3, 0.3, 0.8)

@@ -79,11 +79,16 @@ constants.PALM_COLOR = {0.4, 0.7, 0.1}
 constants.HEALTH_BAR_WIDTH = 200
 constants.HEALTH_BAR_HEIGHT = 20
 
--- HUD bar settings
-constants.HUD_BAR_WIDTH = 200
-constants.HUD_BAR_HEIGHT = 20
-constants.HUD_BAR_SPACING = 30
-constants.HUD_START_Y = 20
+-- UI scaling factor (adjusts UI elements based on screen resolution)
+-- Higher values = larger UI elements, lower values = smaller UI elements
+constants.UI_SCALE = constants.GAME_HEIGHT / 600  -- Scale based on 600px base height
+
+-- HUD bar settings (scaled versions)
+constants.HUD_BAR_WIDTH = 200 * constants.UI_SCALE
+constants.HUD_BAR_HEIGHT = 20 * constants.UI_SCALE
+constants.HUD_BAR_SPACING = 30 * constants.UI_SCALE
+constants.HUD_START_Y = 20 * constants.UI_SCALE
+constants.HUD_MARGIN_X = 10 * constants.UI_SCALE
 
 -- Graphics settings
 constants.BACKGROUND_COLOR = {0.1, 0.1, 0.1}
