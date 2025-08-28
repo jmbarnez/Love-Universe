@@ -3,6 +3,7 @@
 
 local combat = {}
 local constants = require("src.constants")
+local lume = require("lib.lume")
 
 -- Combat constants
 local ATTACK_COOLDOWN = 2.0 -- Base attack cooldown for enemies
@@ -52,7 +53,7 @@ function combat.update(entity, dt, currentTime, playerX, playerY, player, onDama
 
     -- Handle attacking player if in combat
     if entity.combatState.inCombat and entity.combatState.targetPlayer then
-        local distance = math.sqrt((entity.worldX - playerX)^2 + (entity.worldY - playerY)^2)
+        local distance = lume.distance(entity.worldX, entity.worldY, playerX, playerY)
 
         if distance <= entity.combatState.interactionDistance then
             -- Check if enough time has passed since last attack
@@ -116,7 +117,7 @@ function combat.playerAttack(entity, player, currentTime, onDamage)
     entity.combatState.lastPlayerAttackTime = currentTime
 
     if entity.health <= 0 then
-        entity.alive = false
+        -- Don't set alive = false here, let the entity's own update function handle death
         return true -- Entity died
     end
 

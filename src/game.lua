@@ -9,15 +9,17 @@ local chicken = require("src.enemies.chicken")
 local damage_effects = require("src.damage_effects")
 local inventory = require("src.inventory")
 local constants = require("src.constants")
+local context_menu = require("src.context_menu")
+local Camera = require("lib.hump.camera")
+local Timer = require("lib.hump.timer")
+local lume = require("lib.lume")
+local suit = require("lib.suit")
+local ui = require("src.ui")
 
 -- Game state
 local gameState = {
     player = nil,
-    camera = {
-        x = 0,
-        y = 0,
-        zoom = 1
-    },
+    camera = nil, -- Will be initialized as hump.camera
     world = {},
     objects = {},
     chickens = {},
@@ -35,7 +37,9 @@ local gameState = {
     -- Damage effects
     damageNumbers = {},
     -- Inventory
-    inventory = nil
+    inventory = nil,
+    -- Context Menu
+    contextMenu = nil
 }
 
 -- Initialize game
@@ -48,7 +52,8 @@ function game.init()
     love.graphics.setWireframe(false)
 
     -- Generate the world
-    gameState.world, gameState.objects, gameState.chickens = world.generate()
+    gameState.world, gameState.objects, gameState.chickens, gameState.groundItems = world.generate()
+    world.groundItems = gameState.groundItems
 
     -- Find a safe spawn location on land
     local spawnX, spawnY = world.findSafeSpawn(gameState.world)
@@ -59,6 +64,10 @@ function game.init()
     end
 
     gameState.player = player.create(spawnX, spawnY)
+
+    -- Initialize hump camera centered on player
+    gameState.camera = Camera()
+    gameState.camera:lookAt(spawnX, spawnY)
 
     -- Count chickens and ensure max 3 limit
     local chickenCount = 0
@@ -90,13 +99,12 @@ function game.init()
     -- Initialize inventory
     gameState.inventory = inventory.create()
 
-    -- Add some test items to inventory
-    inventory.addItem(gameState.inventory, {name = "Health Potion", color = {1, 0, 0}, count = 5})
-    inventory.addItem(gameState.inventory, {name = "Mana Crystal", color = {0, 0.5, 1}, count = 3})
-    inventory.addItem(gameState.inventory, {name = "Iron Sword", color = {0.8, 0.8, 0.8}, count = 1})
-    inventory.addItem(gameState.inventory, {name = "Wood Shield", color = {0.6, 0.4, 0.2}, count = 1})
-    inventory.addItem(gameState.inventory, {name = "Leather Boots", color = {0.4, 0.2, 0.1}, count = 1})
-    inventory.addItem(gameState.inventory, {name = "Magic Ring", color = {1, 0.8, 0}, count = 1})
+    -- Initialize UI system
+    ui.init()
+    
+    -- Add startup messages to chat
+    ui.addChatMessage("Welcome to Love2D RPG!", {0, 1, 0}) -- Green
+    ui.addChatMessage("Press F1 or ` to toggle console", {0.7, 0.7, 1}) -- Light blue
 
 end
 
@@ -107,14 +115,15 @@ function game.update(dt)
 
     -- Update mouse world position
     local mouseX, mouseY = love.mouse.getPosition()
-    gameState.mouse.worldX, gameState.mouse.worldY = world.screenToWorld(mouseX, mouseY, gameState.camera)
+    gameState.mouse.worldX, gameState.mouse.worldY = gameState.camera:worldCoords(mouseX, mouseY)
 
     -- Update player movement
     if gameState.player then
         player.update(gameState.player, dt,
             function(x, y) return world.isWalkable(x, y, gameState.world) end,
             world.isInWorld,
-            gameState.movementTarget)
+            gameState.movementTarget,
+            constants.INTERACTION_DISTANCE, game)
 
         -- Clear movement target if reached
         if gameState.movementTarget and gameState.movementTarget.reached then
@@ -139,6 +148,9 @@ function game.update(dt)
 
     -- Handle auto-attacking if player is in combat
     game.updateAutoAttack(dt)
+    
+    -- Update UI system
+    ui.update(dt)
 end
 
 -- Update chickens
@@ -181,28 +193,26 @@ end
 -- Update camera position
 function game.updateCamera(dt)
     if gameState.player then
-        local targetCamX = gameState.player.x - constants.GAME_WIDTH / 2
-        local targetCamY = gameState.player.y - constants.GAME_HEIGHT / 2
-
-        -- Smooth camera movement with momentum
-        gameState.camera.x = gameState.camera.x + (targetCamX - gameState.camera.x) * constants.CAMERA_FOLLOW_SPEED * dt
-        gameState.camera.y = gameState.camera.y + (targetCamY - gameState.camera.y) * constants.CAMERA_FOLLOW_SPEED * dt
-
+        -- Smooth camera movement using lume.lerp for interpolation
+        local currentX, currentY = gameState.camera:position()
+        local targetX = gameState.player.x
+        local targetY = gameState.player.y
+        
+        local newX = lume.lerp(currentX, targetX, constants.CAMERA_FOLLOW_SPEED * dt)
+        local newY = lume.lerp(currentY, targetY, constants.CAMERA_FOLLOW_SPEED * dt)
+        
         -- Clamp camera to world bounds
-        gameState.camera.x = math.max(0, math.min(gameState.camera.x, constants.WORLD_WIDTH - constants.GAME_WIDTH))
-        gameState.camera.y = math.max(0, math.min(gameState.camera.y, constants.WORLD_HEIGHT - constants.GAME_HEIGHT))
+        newX = lume.clamp(newX, constants.GAME_WIDTH / 2, constants.WORLD_WIDTH - constants.GAME_WIDTH / 2)
+        newY = lume.clamp(newY, constants.GAME_HEIGHT / 2, constants.WORLD_HEIGHT - constants.GAME_HEIGHT / 2)
+        
+        gameState.camera:lookAt(newX, newY)
     end
 end
 
 -- Center camera on player
 function game.centerCamera()
     if gameState.player then
-        gameState.camera.x = gameState.player.x - constants.GAME_WIDTH / 2
-        gameState.camera.y = gameState.player.y - constants.GAME_HEIGHT / 2
-
-        -- Clamp camera to world bounds
-        gameState.camera.x = math.max(0, math.min(gameState.camera.x, constants.WORLD_WIDTH - constants.GAME_WIDTH))
-        gameState.camera.y = math.max(0, math.min(gameState.camera.y, constants.WORLD_HEIGHT - constants.GAME_HEIGHT))
+        gameState.camera:lookAt(gameState.player.x, gameState.player.y)
     end
 end
 
@@ -244,8 +254,8 @@ function game.tryAttackChicken()
         for y = math.max(1, playerTileY - searchRadius), math.min(tilesY, playerTileY + searchRadius) do
             if gameState.chickens[x] and gameState.chickens[x][y] and gameState.chickens[x][y].alive then
                 local chick = gameState.chickens[x][y]
-                local distance = math.sqrt((chick.worldX - playerX)^2 + (chick.worldY - playerY)^2)
-                if distance <= 75 and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
+                local distance = lume.distance(chick.worldX, chick.worldY, playerX, playerY)
+                if distance <= constants.INTERACTION_DISTANCE and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
                     closestDistance = distance
                     closestChicken = chick
                     closestTileX, closestTileY = x, y
@@ -281,31 +291,90 @@ end
 
 -- Handle mouse input
 function game.handleMousePress(x, y, button)
+    -- Handle UI clicks first
+    ui.mousepressed(x, y, button)
+    
+    -- Handle context menu clicks
+    if gameState.contextMenu then
+        local selected_option = context_menu.handleClick(gameState.contextMenu, x, y)
+        if selected_option then
+            selected_option.action()
+        end
+        gameState.contextMenu = nil
+        return
+    end
+
     -- Handle inventory clicks first (if inventory is visible)
     if gameState.inventory.visible then
         inventory.handleClick(gameState.inventory, x, y, button)
         return -- Don't process other mouse events when inventory is open
     end
 
-    if button == 2 then -- Right-click
-        -- Convert screen coordinates to world coordinates
-        local worldX, worldY = world.screenToWorld(x, y, gameState.camera)
-
-        -- Check if right-click is on a chicken
-        local clickedChicken = game.getChickenAtPosition(worldX, worldY)
+    if button == 1 then -- Left-click
+        local worldX, worldY = gameState.camera:worldCoords(x, y)
+        local clickedChicken, _, _ = game.getChickenAtPosition(worldX, worldY)
+        local clickedItem, itemIndex = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
 
         if clickedChicken then
-            -- Right-clicked on a chicken - move to attack it
-            game.moveToAttackChicken(clickedChicken)
+            gameState.movementTarget = {
+                x = clickedChicken.worldX,
+                y = clickedChicken.worldY,
+                isAttackTarget = true,
+                targetEntity = clickedChicken
+            }
+            gameState.playerTarget = {
+                entity = clickedChicken,
+                tileX = math.floor(clickedChicken.worldX / constants.TILE_SIZE) + 1,
+                tileY = math.floor(clickedChicken.worldY / constants.TILE_SIZE) + 1
+            }
+        elseif clickedItem then
+            player.pickupItem(gameState.player, gameState.groundItems, gameState.inventory, itemIndex)
         else
-            -- Right-clicked on empty space - just move there
             gameState.movementTarget = {x = worldX, y = worldY}
+        end
+    elseif button == 2 then -- Right-click
+        local worldX, worldY = gameState.camera:worldCoords(x, y)
+        local clickedChicken, _, _ = game.getChickenAtPosition(worldX, worldY)
+        local clickedItem, itemIndex = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
+
+        if clickedChicken then
+            gameState.contextMenu = context_menu.create(x, y, {
+                {text = "Attack", action = function() 
+                    gameState.movementTarget = {
+                        x = clickedChicken.worldX,
+                        y = clickedChicken.worldY,
+                        isAttackTarget = true,
+                        targetEntity = clickedChicken
+                    }
+                    gameState.playerTarget = {
+                        entity = clickedChicken,
+                        tileX = math.floor(clickedChicken.worldX / constants.TILE_SIZE) + 1,
+                        tileY = math.floor(clickedChicken.worldY / constants.TILE_SIZE) + 1
+                    }
+                end}
+            })
+        elseif clickedItem then
+            gameState.contextMenu = context_menu.create(x, y, {
+                {text = "Pickup", action = function() player.pickupItem(gameState.player, gameState.groundItems, gameState.inventory, itemIndex) end}
+            })
         end
     end
 end
 
+-- Handle mouse release
+function game.handleMouseRelease(x, y, button)
+    ui.mousereleased(x, y, button)
+end
+
+-- Handle text input
+function game.handleTextInput(text)
+    ui.textinput(text)
+end
+
 -- Handle keyboard input (WASD movement)
 function game.handleKeyPress(key)
+    ui.keypressed(key)
+    
     if key == "escape" then
         love.event.quit()
     elseif key == "r" then
@@ -319,21 +388,21 @@ function game.handleKeyPress(key)
     elseif key == "tab" then
         -- Toggle inventory visibility
         inventory.toggle(gameState.inventory)
+    
     end
 end
 
 -- Draw game world and UI
 function game.draw()
-    -- Draw world
-    love.graphics.push()
-    love.graphics.translate(-gameState.camera.x, -gameState.camera.y)
+    -- Draw world using hump camera
+    gameState.camera:set()
 
     -- Draw tiles and objects
     world.drawTiles(gameState.world, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT)
     world.drawObjects(gameState.objects, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT)
 
     -- Draw chickens
-    world.drawChickens(gameState.chickens, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT, gameState.player.x, gameState.player.y)
+    world.drawChickens(gameState.chickens, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT, gameState.player.x, gameState.player.y, gameState.playerTarget, gameState.mouse.worldX, gameState.mouse.worldY)
 
     -- Draw player
     if gameState.player then
@@ -343,7 +412,10 @@ function game.draw()
     -- Draw damage numbers
     game.drawDamageNumbers()
 
-    love.graphics.pop()
+    -- Draw ground items
+    world.drawGroundItems(gameState.groundItems, gameState.camera)
+
+    gameState.camera:unset()
 
 
     -- Draw interaction prompts for chickens
@@ -357,6 +429,14 @@ function game.draw()
 
     -- Draw inventory (if visible)
     inventory.draw(gameState.inventory)
+
+    -- Draw context menu
+    context_menu.draw(gameState.contextMenu)
+    
+    -- Draw enhanced UI system
+    ui.draw()
+    
+    -- Debug messages now handled by chat window
 end
 
 -- Update combat timers and clear combat flags when appropriate
@@ -400,6 +480,8 @@ function game.updateAutoAttack(dt)
         return
     end
 
+    print("Updating auto attack...")
+
     -- Find the current target if we don't have one
     if not gameState.playerTarget then
         game.findPlayerTarget()
@@ -425,6 +507,10 @@ function game.updateAutoAttack(dt)
             if not gameState.playerTarget then
                 gameState.player.inCombat = false
                 return
+            end
+            -- If a new target is found, and we can attack, attack immediately
+            if game.canPlayerAttack() then
+                game.performAutoAttack()
             end
         end
     end
@@ -456,8 +542,8 @@ function game.findPlayerTarget()
         for y = math.max(1, playerTileY - searchRadius), math.min(tilesY, playerTileY + searchRadius) do
             if gameState.chickens[x] and gameState.chickens[x][y] and gameState.chickens[x][y].alive then
                 local chick = gameState.chickens[x][y]
-                local distance = math.sqrt((chick.worldX - playerX)^2 + (chick.worldY - playerY)^2)
-                if distance <= 75 and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
+                local distance = lume.distance(chick.worldX, chick.worldY, playerX, playerY)
+                if distance <= constants.INTERACTION_DISTANCE and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
                     closestDistance = distance
                     closestChicken = chick
                     closestTileX, closestTileY = x, y
@@ -486,9 +572,9 @@ function game.isTargetValid(target)
     -- Check if target is still in range
     local playerX = gameState.player.x
     local playerY = gameState.player.y
-    local distance = math.sqrt((target.entity.worldX - playerX)^2 + (target.entity.worldY - playerY)^2)
+    local distance = lume.distance(target.entity.worldX, target.entity.worldY, playerX, playerY)
 
-    return distance <= 75 -- INTERACTION_DISTANCE
+    return distance <= constants.INTERACTION_DISTANCE -- INTERACTION_DISTANCE
 end
 
 -- Perform an automatic attack on the current target
@@ -499,10 +585,7 @@ function game.performAutoAttack()
     local tileX = gameState.playerTarget.tileX
     local tileY = gameState.playerTarget.tileY
 
-            -- Set player in combat (target will handle its own combat state)
-        gameState.player.inCombat = true
-
-    -- Perform the attack
+            -- Perform the attack
     local died = chicken.attack(target, gameState.player, gameState.gameTime, game.addDamageNumber)
     if died then
         -- Remove dead chicken from the game
@@ -530,7 +613,7 @@ function game.getChickenAtPosition(worldX, worldY)
         for y = math.max(1, tileY - checkRadius), math.min(tilesY, tileY + checkRadius) do
             if gameState.chickens[x] and gameState.chickens[x][y] and gameState.chickens[x][y].alive then
                 local chick = gameState.chickens[x][y]
-                local distance = math.sqrt((chick.worldX - worldX)^2 + (chick.worldY - worldY)^2)
+                local distance = lume.distance(chick.worldX, chick.worldY, worldX, worldY)
 
                 -- If click is within chicken's hitbox (size + some padding)
                 if distance <= chick.size + 5 then
@@ -561,6 +644,44 @@ function game.moveToAttackChicken(chicken)
     }
 end
 
+function game.startCombat(player)
+    player.inCombat = true
+end
+
+-- Execute attack on a specific target entity
+function game.executeAttackOnTarget(targetEntity)
+    if not targetEntity or not targetEntity.alive then return end
+    
+    -- Find the target in our chickens array
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+    
+    for x = 1, tilesX do
+        for y = 1, tilesY do
+            if gameState.chickens[x] and gameState.chickens[x][y] == targetEntity then
+                -- Set the target for auto-attacking system
+                gameState.playerTarget = {
+                    entity = targetEntity,
+                    tileX = x,
+                    tileY = y
+                }
+                
+                -- Execute immediate attack if off cooldown
+                if game.canPlayerAttack() then
+                    local died = chicken.attack(targetEntity, gameState.player, gameState.gameTime, game.addDamageNumber)
+                    if died then
+                        gameState.chickens[x][y] = nil
+                        gameState.targetClearTime = gameState.gameTime + 2.0
+                        gameState.player.inCombat = false
+                    end
+                    gameState.lastPlayerAttackTime = gameState.gameTime
+                end
+                return
+            end
+        end
+    end
+end
+
 
 
 -- Draw damage numbers
@@ -568,6 +689,11 @@ function game.drawDamageNumbers()
     for _, damageNum in ipairs(gameState.damageNumbers) do
         damage_effects.drawDamageNumber(damageNum, gameState.camera)
     end
+end
+
+-- Add message to chat console
+function game.addMessage(text, color)
+    ui.addChatMessage(text, color or {1, 1, 1}) -- Default white
 end
 
 -- Get game state (for external access)

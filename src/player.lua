@@ -3,6 +3,7 @@
 
 local player = {}
 local constants = require("src.constants")
+local pathfinding = require("src.pathfinding")
 
 -- Create a new player
 function player.create(worldX, worldY)
@@ -38,7 +39,7 @@ function player.create(worldX, worldY)
 end
 
 -- Update player (includes flash effects and click-to-move)
-function player.update(p, dt, isWalkable, isInWorld, movementTarget)
+function player.update(p, dt, isWalkable, isInWorld, movementTarget, attackRange, game)
     local moveX, moveY = 0, 0
 
     -- Handle movement target (click-to-move only)
@@ -48,18 +49,27 @@ function player.update(p, dt, isWalkable, isInWorld, movementTarget)
         local dy = movementTarget.y - p.y
         local distance = math.sqrt(dx * dx + dy * dy)
 
-        -- Check if we've reached the target (within 10 pixels)
-        if distance <= 10 then
+        local stopDistance = 10
+        if movementTarget.isAttackTarget then
+            stopDistance = attackRange or 75
+        end
+
+        -- Check if we've reached the target
+        if distance <= stopDistance then
             -- Clear movement target
             movementTarget.reached = true
-            -- If this was an attack target, start combat
+            -- If this was an attack target, start combat and attack immediately
             if movementTarget.isAttackTarget then
-                p.inCombat = true
+                if game then
+                    game.startCombat(p)
+                    -- Trigger immediate attack when reaching target
+                    game.executeAttackOnTarget(movementTarget.targetEntity)
+                end
+                print("Player reached enemy and attacking!")
             end
         else
-            -- Move towards target
-            moveX = dx / distance
-            moveY = dy / distance
+            -- Use pathfinding for better navigation around obstacles
+            moveX, moveY = pathfinding.getNextDirection(p.x, p.y, movementTarget.x, movementTarget.y, isWalkable, isInWorld)
         end
     end
 
@@ -112,6 +122,17 @@ function player.update(p, dt, isWalkable, isInWorld, movementTarget)
         if p.flashTimer <= 0 then
             p.flashTimer = nil
         end
+    end
+end
+
+-- Pick up nearby items
+function player.pickupItem(p, groundItems, inventory, itemIndex)
+    local item_to_pick_up = groundItems[itemIndex]
+    if not item_to_pick_up then return end
+
+    local inventory_module = require("src.inventory")
+    if inventory_module.addItem(inventory, item_to_pick_up.item) then
+        table.remove(groundItems, itemIndex)
     end
 end
 

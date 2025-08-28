@@ -4,6 +4,7 @@
 local world = {}
 local constants = require("src.constants")
 local chicken = require("src.enemies.chicken")
+local lume = require("lib.lume")
 
 -- Generate height map (pixel-based)
 function world.generateHeightMap()
@@ -240,21 +241,73 @@ function world.generate()
     -- Generate scattered objects and chickens
     local objects, chickens = world.generateObjects(gameWorld)
 
-    return gameWorld, objects, chickens
+    -- Initialize ground items table
+    local groundItems = {}
+
+    return gameWorld, objects, chickens, groundItems
+end
+
+-- Add a ground item to the world
+function world.addGroundItem(item, x, y)
+    if world.groundItems then
+        table.insert(world.groundItems, {item = item, x = x, y = y})
+    end
+end
+
+-- Draw ground items
+function world.drawGroundItems(groundItems, camera)
+    if not groundItems then
+        return
+    end
+    
+    for i, groundItem in ipairs(groundItems) do
+        
+        -- Draw a glowing circle for better visibility
+        love.graphics.setColor(1, 1, 0, 0.8) -- Yellow with transparency
+        love.graphics.circle("fill", groundItem.x, groundItem.y, 8)
+        
+        -- Draw outline
+        love.graphics.setColor(1, 0.8, 0, 1) -- Golden outline
+        love.graphics.circle("line", groundItem.x, groundItem.y, 8)
+
+        -- Draw item name with background for better readability
+        love.graphics.setColor(0, 0, 0, 0.7) -- Dark background
+        local text = groundItem.item.name .. " (" .. groundItem.item.count .. ")"
+        local font = love.graphics.getFont()
+        local textWidth = font:getWidth(text)
+        local textHeight = font:getHeight()
+        love.graphics.rectangle("fill", groundItem.x + 10, groundItem.y - 5, textWidth + 4, textHeight + 2)
+        
+        love.graphics.setColor(1, 1, 1) -- White text
+        love.graphics.print(text, groundItem.x + 12, groundItem.y - 4)
+    end
+    
+    -- Reset color
+    love.graphics.setColor(1, 1, 1)
+end
+
+function world.getGroundItemAtPosition(worldX, worldY, groundItems)
+    local checkRadius = 10 -- pixels
+    for i = #groundItems, 1, -1 do
+        local groundItem = groundItems[i]
+        local distance = lume.distance(groundItem.x, groundItem.y, worldX, worldY)
+        if distance <= checkRadius then
+            return groundItem, i
+        end
+    end
+    return nil
 end
 
 -- Convert screen coordinates to world coordinates (pixel-based)
 function world.screenToWorld(screenX, screenY, camera)
-    local worldX = screenX + camera.x
-    local worldY = screenY + camera.y
-    return worldX, worldY
+    -- Use hump camera for coordinate conversion
+    return camera:worldCoords(screenX, screenY)
 end
 
 -- Convert world coordinates to screen coordinates (pixel-based)
 function world.worldToScreen(worldX, worldY, camera)
-    local screenX = worldX - camera.x
-    local screenY = worldY - camera.y
-    return screenX, screenY
+    -- Use hump camera for coordinate conversion
+    return camera:screenCoords(worldX, worldY)
 end
 
 -- Check if coordinates are within world bounds (pixel-based)
@@ -314,11 +367,19 @@ end
 
 -- Draw world tiles
 function world.drawTiles(gameWorld, camera, GAME_WIDTH, GAME_HEIGHT)
-    -- Calculate visible area in tile coordinates with buffer for smooth scrolling
-    local startTileX = math.max(1, math.floor(camera.x / constants.TILE_SIZE))
-    local startTileY = math.max(1, math.floor(camera.y / constants.TILE_SIZE))
-    local endTileX = math.min(#gameWorld, startTileX + math.ceil(GAME_WIDTH / constants.TILE_SIZE) + 2)
-    local endTileY = math.min(#gameWorld[1] or 0, startTileY + math.ceil(GAME_HEIGHT / constants.TILE_SIZE) + 2)
+    -- With hump camera, we draw all visible tiles since camera:set() handles the transformation
+    -- Calculate visible area around camera center
+    local camX, camY = 0, 0
+    if camera.position then
+        camX, camY = camera:position()
+    end
+    
+    -- Calculate which tiles might be visible (with large buffer for safety)
+    local buffer = 5 -- Extra tiles around view
+    local startTileX = math.max(1, math.floor((camX - GAME_WIDTH/2) / constants.TILE_SIZE) - buffer)
+    local startTileY = math.max(1, math.floor((camY - GAME_HEIGHT/2) / constants.TILE_SIZE) - buffer)
+    local endTileX = math.min(#gameWorld, math.ceil((camX + GAME_WIDTH/2) / constants.TILE_SIZE) + buffer)
+    local endTileY = math.min(#gameWorld[1] or 0, math.ceil((camY + GAME_HEIGHT/2) / constants.TILE_SIZE) + buffer)
 
     -- Draw tiles
     for x = startTileX, endTileX do
@@ -353,11 +414,18 @@ end
 
 -- Draw world objects
 function world.drawObjects(objects, camera, GAME_WIDTH, GAME_HEIGHT)
-    -- Calculate visible area in tile coordinates with buffer for smooth scrolling
-    local startTileX = math.max(1, math.floor(camera.x / constants.TILE_SIZE))
-    local startTileY = math.max(1, math.floor(camera.y / constants.TILE_SIZE))
-    local endTileX = math.min(#objects, startTileX + math.ceil(GAME_WIDTH / constants.TILE_SIZE) + 2)
-    local endTileY = math.min(#objects[1] or 0, startTileY + math.ceil(GAME_HEIGHT / constants.TILE_SIZE) + 2)
+    -- With hump camera, calculate visible area around camera center
+    local camX, camY = 0, 0
+    if camera.position then
+        camX, camY = camera:position()
+    end
+    
+    -- Calculate which tiles might be visible (with buffer for safety)
+    local buffer = 5 -- Extra tiles around view
+    local startTileX = math.max(1, math.floor((camX - GAME_WIDTH/2) / constants.TILE_SIZE) - buffer)
+    local startTileY = math.max(1, math.floor((camY - GAME_HEIGHT/2) / constants.TILE_SIZE) - buffer)
+    local endTileX = math.min(#objects, math.ceil((camX + GAME_WIDTH/2) / constants.TILE_SIZE) + buffer)
+    local endTileY = math.min(#objects[1] or 0, math.ceil((camY + GAME_HEIGHT/2) / constants.TILE_SIZE) + buffer)
 
     -- Draw objects (trees, rocks, flowers)
     for x = startTileX, endTileX do
@@ -393,7 +461,7 @@ function world.drawObjects(objects, camera, GAME_WIDTH, GAME_HEIGHT)
 end
 
 -- Draw chickens
-function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, playerY)
+function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, playerY, playerTarget, mouseWorldX, mouseWorldY)
     -- Find closest interactable chicken for outline
     local closestChicken = nil
     local closestDistance = math.huge
@@ -405,8 +473,8 @@ function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, 
         for y = 1, tilesY do
             if chickens[x] and chickens[x][y] and chickens[x][y].alive then
                 local chick = chickens[x][y]
-                local distance = math.sqrt((chick.worldX - playerX)^2 + (chick.worldY - playerY)^2)
-                if distance <= 75 and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
+                local distance = lume.distance(chick.worldX, chick.worldY, playerX, playerY)
+                if distance <= constants.INTERACTION_DISTANCE and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
                     closestDistance = distance
                     closestChicken = chick
                 end
@@ -418,8 +486,16 @@ function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, 
     for x = 1, tilesX do
         for y = 1, tilesY do
             if chickens[x] and chickens[x][y] then
-                local isInteractable = (chickens[x][y] == closestChicken)
-                chicken.draw(chickens[x][y], camera, isInteractable)
+                local chick = chickens[x][y]
+                local isInteractable = (chick == closestChicken)
+                local isTargeted = (playerTarget and playerTarget.entity == chick)
+                local isHovered = false
+                local distance_to_mouse = lume.distance(chick.worldX, chick.worldY, mouseWorldX, mouseWorldY)
+                if distance_to_mouse <= chick.size then
+                    isHovered = true
+                end
+
+                chicken.draw(chickens[x][y], camera, isInteractable, isTargeted, isHovered)
             end
         end
     end

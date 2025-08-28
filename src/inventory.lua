@@ -36,10 +36,21 @@ end
 
 -- Add item to inventory
 function inventory.addItem(inv, item)
+    -- Try to stack with existing items
+    if item.stackable then
+        for i = 1, TOTAL_SLOTS do
+            if inv.items[i] and inv.items[i].name == item.name then
+                inv.items[i].count = (inv.items[i].count or 1) + (item.count or 1)
+                return true -- Item stacked
+            end
+        end
+    end
+
     -- Find first empty slot
     for i = 1, TOTAL_SLOTS do
         if not inv.items[i] then
             inv.items[i] = item
+            if not inv.items[i].count then inv.items[i].count = 1 end
             return true -- Item added successfully
         end
     end

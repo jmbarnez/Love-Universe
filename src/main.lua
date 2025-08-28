@@ -81,3 +81,11 @@ end
 function love.mousepressed(x, y, button)
     game.handleMousePress(x, y, button)
 end
+
+function love.mousereleased(x, y, button)
+    game.handleMouseRelease(x, y, button)
+end
+
+function love.textinput(text)
+    game.handleTextInput(text)
+end

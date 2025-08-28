@@ -4,13 +4,13 @@
 local chicken = {}
 local constants = require("src.constants")
 local combat = require("src.combat")
+local lume = require("lib.lume")
 
 -- Chicken properties
 local CHICKEN_SIZE = 16 -- Small size for cute chickens
 local CHICKEN_COLOR = {1.0, 1.0, 1.0} -- White color for cute chickens
 local CHICKEN_OUTLINE_COLOR = {0.8, 0.8, 0.8} -- Light gray outline
 local CHICKEN_HEALTH = 3 -- Reduced to 3 HP like RuneScape
-local INTERACTION_DISTANCE = 75 -- Interaction distance in pixels (about 2.5 tiles)
 local CHICKEN_ATTACK_DAMAGE = 1 -- Chicken deals 1 damage
 local PLAYER_ATTACK_DAMAGE = 1 -- Player deals 1 damage per hit
 local CHICKEN_ATTACK_COOLDOWN = 2.0 -- 2 second cooldown between chicken attacks
@@ -31,7 +31,10 @@ function chicken.create(worldX, worldY)
         -- Entity info
         type = "chicken",
         name = "Chicken",
-        level = 1
+        level = 1,
+        lootTable = {
+            {item = "feather", min = 1, max = 2, chance = 1.0}
+        }
     }
 
     -- Initialize combat state
@@ -43,24 +46,54 @@ end
 -- Update chicken (combat AI and timers)
 function chicken.update(chick, dt, currentTime, playerX, playerY, player, onDamage)
     if not chick.alive then return end
-    
-
 
     -- Use the new combat system
     combat.update(chick, dt, currentTime, playerX, playerY, player, onDamage)
+
+    if chick.health <= 0 and chick.alive then
+        chicken.die(chick)
+    end
+end
+
+-- Called when a chicken dies
+function chicken.die(chick)
+    chick.alive = false
+    local world = require("src.world")
+    local item_definitions = {
+        feather = require("src.items.feather")
+    }
+
+    for _, drop in ipairs(chick.lootTable) do
+        if love.math.random() <= drop.chance then
+            local item_def = item_definitions[drop.item]
+            if item_def then
+                local num_items = love.math.random(drop.min, drop.max)
+                if num_items > 0 then
+                    local item_drop = item_def.new()
+                    item_drop.count = num_items
+                    world.addGroundItem(item_drop, chick.worldX, chick.worldY)
+                end
+            end
+        end
+    end
 end
 
 -- Draw a chicken
-function chicken.draw(chick, camera, isInteractable)
+function chicken.draw(chick, camera, isInteractable, isTargeted, isHovered)
     if not chick.alive then return end
 
     -- Draw chicken at its world position (camera translation is handled by game.draw)
     local screenX = chick.worldX
     local screenY = chick.worldY
 
+    local interaction_outline = require("src.interaction_outline")
+
     -- Draw interaction outline if this chicken is the target
-    if isInteractable then
-        local interaction_outline = require("src.interaction_outline")
+    if isTargeted then
+        interaction_outline.draw(chick, screenX, screenY, {1, 0, 0}) -- Red
+    elseif isHovered then
+        interaction_outline.draw(chick, screenX, screenY, {1, 1, 1}) -- White
+    elseif isInteractable then
         interaction_outline.draw(chick, screenX, screenY)
     end
 
@@ -99,8 +132,8 @@ end
 function chicken.canInteract(playerX, playerY, chick)
     if not chick.alive then return false end
 
-    local distance = math.sqrt((playerX - chick.worldX)^2 + (playerY - chick.worldY)^2)
-    return distance <= INTERACTION_DISTANCE
+    local distance = lume.distance(playerX, playerY, chick.worldX, chick.worldY)
+    return distance <= constants.INTERACTION_DISTANCE
 end
 
 -- Attack a chicken (damage it)
@@ -108,7 +141,14 @@ function chicken.attack(chick, player, currentTime, onDamage)
     if not chick.alive then return false end
 
     -- Use the new combat system for player attacks
-    return combat.playerAttack(chick, player, currentTime, onDamage)
+    local died = combat.playerAttack(chick, player, currentTime, onDamage)
+    
+    -- If the chicken died, call the die function immediately
+    if died and chick.alive then
+        chicken.die(chick)
+    end
+    
+    return died
 end
 
 -- Chicken attacks player (now handled by combat system)

@@ -4,8 +4,8 @@
 local interaction_outline = {}
 
 -- Draw outline for chicken entity
-function interaction_outline.drawChickenOutline(chick, screenX, screenY)
-    love.graphics.setColor(1, 1, 0, 0.8) -- Yellow outline for interaction
+function interaction_outline.drawChickenOutline(chick, screenX, screenY, color)
+    love.graphics.setColor(color or {1, 1, 0, 0.8}) -- Yellow outline for interaction
 
     -- Draw outline around chicken body (oval)
     love.graphics.ellipse("line", screenX, screenY, chick.size/2 + 2, chick.size/3 + 2)
@@ -49,18 +49,18 @@ function interaction_outline.registerOutline(entityType, outlineFunction)
 end
 
 -- Generic outline drawing function - dispatches based on entity type
-function interaction_outline.draw(entity, screenX, screenY)
+function interaction_outline.draw(entity, screenX, screenY, color)
     if not entity or not entity.type then return end
 
     -- Check if there's a custom outline function for this entity type
     if customOutlines[entity.type] then
-        customOutlines[entity.type](entity, screenX, screenY)
+        customOutlines[entity.type](entity, screenX, screenY, color)
         return
     end
 
     -- Built-in outline functions
     if entity.type == "chicken" then
-        interaction_outline.drawChickenOutline(entity, screenX, screenY)
+        interaction_outline.drawChickenOutline(entity, screenX, screenY, color)
     elseif entity.type == "player" then
         interaction_outline.drawCircleOutline(entity, screenX, screenY)
     elseif entity.type == "orc" then

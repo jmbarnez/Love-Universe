@@ -1,12 +1,14 @@
 -- HUD module for Love2D RPG
--- Simple health and stamina bars only
+-- Enhanced HUD with new UI system integration
 
 local hud = {}
 local constants = require("src.constants")
+local ui = require("src.ui")
+local lume = require("lib.lume")
 
 
 
--- Draw minimal HUD with three bars in top left corner
+-- Draw enhanced HUD with new UI system
 function hud.draw(player, gameState)
     local barWidth = constants.HUD_BAR_WIDTH
     local barHeight = constants.HUD_BAR_HEIGHT
@@ -14,45 +16,10 @@ function hud.draw(player, gameState)
     local startY = constants.HUD_START_Y
     local barX = 10
 
-    -- Helper function to draw a bar with text inside
-    local function drawBarWithText(label, current, max, yPos, fillColor, textColor)
-        -- Background
-        love.graphics.setColor(0.3, 0.3, 0.3)
-        love.graphics.rectangle("fill", barX, yPos, barWidth, barHeight)
-
-        -- Fill
-        love.graphics.setColor(fillColor[1], fillColor[2], fillColor[3])
-        love.graphics.rectangle("fill", barX, yPos, barWidth * (current / max), barHeight)
-
-        -- Border
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.rectangle("line", barX, yPos, barWidth, barHeight)
-
-        -- Text inside bar (centered)
-        local text = label .. ": " .. current .. "/" .. max
-        local font = love.graphics.getFont()
-        local textWidth = font:getWidth(text)
-        local textHeight = font:getHeight()
-        local textX = barX + (barWidth - textWidth) / 2
-        local textY = yPos + (barHeight - textHeight) / 2
-
-        love.graphics.setColor(textColor[1], textColor[2], textColor[3])
-        love.graphics.print(text, textX, textY)
-    end
-
-    -- Health Bar (Red background, white text)
-    local healthColor = {1, 0, 0} -- Red
-    -- Flash brighter red when taking damage
-    if player.flashTimer and player.flashTimer > 0 then
-        healthColor = {1, 0.3, 0.3} -- Light red flash
-    end
-    drawBarWithText("HP", player.health, player.maxHealth, startY, healthColor, {1, 1, 1})
-
-    -- Mana Bar (Blue background, white text)
-    drawBarWithText("MP", math.floor(player.mana), player.maxMana, startY + spacing, {0, 0.5, 1}, {1, 1, 1})
-
-    -- Stamina Bar (Yellow background, dark text for contrast)
-    drawBarWithText("ST", math.floor(player.stamina), player.maxStamina, startY + (spacing * 2), {1, 1, 0}, {0, 0, 0})
+    -- Use the new UI system for better-looking bars
+    ui.drawHealthBar(barX, startY, barWidth, barHeight, player.health, player.maxHealth, "Health")
+    ui.drawManaBar(barX, startY + spacing, barWidth, barHeight, player.mana, player.maxMana, "Mana")
+    ui.drawStaminaBar(barX, startY + spacing * 2, barWidth, barHeight, player.stamina, player.maxStamina, "Stamina")
 
     -- Reset color
     love.graphics.setColor(1, 1, 1)
@@ -90,7 +57,7 @@ function hud.getTooltipTarget(gameState)
                 for y = math.max(1, mouseTileY - checkRadius), math.min(tilesY, mouseTileY + checkRadius) do
                     if gameState.chickens[x] and gameState.chickens[x][y] and gameState.chickens[x][y].alive then
                         local chick = gameState.chickens[x][y]
-                        local distance = math.sqrt((chick.worldX - gameState.mouse.worldX)^2 + (chick.worldY - gameState.mouse.worldY)^2)
+                        local distance = lume.distance(chick.worldX, chick.worldY, gameState.mouse.worldX, gameState.mouse.worldY)
 
                         -- If mouse is within reasonable distance of enemy
                         if distance <= chick.size + 20 then
