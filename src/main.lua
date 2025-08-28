@@ -28,6 +28,7 @@ if not success then
         {name = "hud", path = "src/hud.lua"},
         {name = "chicken", path = "src/enemies/chicken.lua"},
         {name = "damage_effects", path = "src/damage_effects.lua"},
+        {name = "inventory", path = "src/inventory.lua"},
         {name = "game", path = "src/game.lua"}
     }
 
@@ -60,6 +61,9 @@ if not game then
     error("Could not load game module!")
 end
 
+-- Load inventory module for mouse handling
+local inventory = require("inventory")
+
 -- Love2D callbacks
 function love.load()
     game.setWindow()
@@ -86,6 +90,15 @@ function love.mousereleased(x, y, button)
     game.handleMouseRelease(x, y, button)
 end
 
+function love.mousemoved(x, y, dx, dy, istouch)
+    -- Handle inventory mouse movement through game module
+    inventory.updateDragTarget(x, y)
+end
+
 function love.textinput(text)
     game.handleTextInput(text)
+end
+
+function love.resize(w, h)
+    game.onWindowResize(w, h)
 end

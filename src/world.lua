@@ -312,7 +312,7 @@ end
 
 -- Check if coordinates are within world bounds (pixel-based)
 function world.isInWorld(x, y)
-    return x >= 0 and x <= constants.WORLD_WIDTH and y >= 0 and y <= constants.WORLD_HEIGHT
+    return x >= 0 and x < constants.WORLD_WIDTH and y >= 0 and y < constants.WORLD_HEIGHT
 end
 
 -- Check if a position is walkable (pixel-based)
@@ -367,19 +367,22 @@ end
 
 -- Draw world tiles
 function world.drawTiles(gameWorld, camera, GAME_WIDTH, GAME_HEIGHT)
-    -- With hump camera, we draw all visible tiles since camera:set() handles the transformation
-    -- Calculate visible area around camera center
-    local camX, camY = 0, 0
-    if camera.position then
-        camX, camY = camera:position()
-    end
-    
-    -- Calculate which tiles might be visible (with large buffer for safety)
-    local buffer = 5 -- Extra tiles around view
-    local startTileX = math.max(1, math.floor((camX - GAME_WIDTH/2) / constants.TILE_SIZE) - buffer)
-    local startTileY = math.max(1, math.floor((camY - GAME_HEIGHT/2) / constants.TILE_SIZE) - buffer)
-    local endTileX = math.min(#gameWorld, math.ceil((camX + GAME_WIDTH/2) / constants.TILE_SIZE) + buffer)
-    local endTileY = math.min(#gameWorld[1] or 0, math.ceil((camY + GAME_HEIGHT/2) / constants.TILE_SIZE) + buffer)
+    -- With hump camera, we need to calculate the actual visible world bounds
+    -- Get the world coordinates of the screen corners to determine what to draw
+    local topLeftWorldX, topLeftWorldY = camera:worldCoords(0, 0)
+    local bottomRightWorldX, bottomRightWorldY = camera:worldCoords(GAME_WIDTH, GAME_HEIGHT)
+
+    -- Clamp the world coordinates to valid bounds to prevent rendering outside the world
+    topLeftWorldX = math.max(0, topLeftWorldX)
+    topLeftWorldY = math.max(0, topLeftWorldY)
+    bottomRightWorldX = math.min(constants.WORLD_WIDTH - 1, bottomRightWorldX)
+    bottomRightWorldY = math.min(constants.WORLD_HEIGHT - 1, bottomRightWorldY)
+
+    -- Calculate which tiles are visible (convert world coords to tile coords)
+    local startTileX = math.max(1, math.floor(topLeftWorldX / constants.TILE_SIZE) + 1)
+    local startTileY = math.max(1, math.floor(topLeftWorldY / constants.TILE_SIZE) + 1)
+    local endTileX = math.min(#gameWorld, math.ceil(bottomRightWorldX / constants.TILE_SIZE) + 1)
+    local endTileY = math.min(#gameWorld[1] or 0, math.ceil(bottomRightWorldY / constants.TILE_SIZE) + 1)
 
     -- Draw tiles
     for x = startTileX, endTileX do
@@ -414,18 +417,22 @@ end
 
 -- Draw world objects
 function world.drawObjects(objects, camera, GAME_WIDTH, GAME_HEIGHT)
-    -- With hump camera, calculate visible area around camera center
-    local camX, camY = 0, 0
-    if camera.position then
-        camX, camY = camera:position()
-    end
-    
-    -- Calculate which tiles might be visible (with buffer for safety)
-    local buffer = 5 -- Extra tiles around view
-    local startTileX = math.max(1, math.floor((camX - GAME_WIDTH/2) / constants.TILE_SIZE) - buffer)
-    local startTileY = math.max(1, math.floor((camY - GAME_HEIGHT/2) / constants.TILE_SIZE) - buffer)
-    local endTileX = math.min(#objects, math.ceil((camX + GAME_WIDTH/2) / constants.TILE_SIZE) + buffer)
-    local endTileY = math.min(#objects[1] or 0, math.ceil((camY + GAME_HEIGHT/2) / constants.TILE_SIZE) + buffer)
+    -- With hump camera, we need to calculate the actual visible world bounds
+    -- Get the world coordinates of the screen corners to determine what to draw
+    local topLeftWorldX, topLeftWorldY = camera:worldCoords(0, 0)
+    local bottomRightWorldX, bottomRightWorldY = camera:worldCoords(GAME_WIDTH, GAME_HEIGHT)
+
+    -- Clamp the world coordinates to valid bounds to prevent rendering outside the world
+    topLeftWorldX = math.max(0, topLeftWorldX)
+    topLeftWorldY = math.max(0, topLeftWorldY)
+    bottomRightWorldX = math.min(constants.WORLD_WIDTH - 1, bottomRightWorldX)
+    bottomRightWorldY = math.min(constants.WORLD_HEIGHT - 1, bottomRightWorldY)
+
+    -- Calculate which tiles are visible (convert world coords to tile coords)
+    local startTileX = math.max(1, math.floor(topLeftWorldX / constants.TILE_SIZE) + 1)
+    local startTileY = math.max(1, math.floor(topLeftWorldY / constants.TILE_SIZE) + 1)
+    local endTileX = math.min(#objects, math.ceil(bottomRightWorldX / constants.TILE_SIZE) + 1)
+    local endTileY = math.min(#objects[1] or 0, math.ceil(bottomRightWorldY / constants.TILE_SIZE) + 1)
 
     -- Draw objects (trees, rocks, flowers)
     for x = startTileX, endTileX do
@@ -462,15 +469,37 @@ end
 
 -- Draw chickens
 function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, playerY, playerTarget, mouseWorldX, mouseWorldY)
+    -- Calculate visible world bounds to only check chickens that might be on screen
+    local topLeftWorldX, topLeftWorldY = camera:worldCoords(0, 0)
+    local bottomRightWorldX, bottomRightWorldY = camera:worldCoords(GAME_WIDTH, GAME_HEIGHT)
+
+    -- Clamp the world coordinates to valid bounds to prevent rendering outside the world
+    topLeftWorldX = math.max(0, topLeftWorldX)
+    topLeftWorldY = math.max(0, topLeftWorldY)
+    bottomRightWorldX = math.min(constants.WORLD_WIDTH - 1, bottomRightWorldX)
+    bottomRightWorldY = math.min(constants.WORLD_HEIGHT - 1, bottomRightWorldY)
+
+    -- Add some buffer around the visible area
+    local buffer = constants.TILE_SIZE * 2
+    topLeftWorldX = topLeftWorldX - buffer
+    topLeftWorldY = topLeftWorldY - buffer
+    bottomRightWorldX = bottomRightWorldX + buffer
+    bottomRightWorldY = bottomRightWorldY + buffer
+
     -- Find closest interactable chicken for outline
     local closestChicken = nil
     local closestDistance = math.huge
     local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
     local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
 
-    -- First pass: find closest chicken within interaction range
-    for x = 1, tilesX do
-        for y = 1, tilesY do
+    -- First pass: find closest chicken within interaction range (only check visible area)
+    local startTileX = math.max(1, math.floor(topLeftWorldX / constants.TILE_SIZE) + 1)
+    local startTileY = math.max(1, math.floor(topLeftWorldY / constants.TILE_SIZE) + 1)
+    local endTileX = math.min(tilesX, math.ceil(bottomRightWorldX / constants.TILE_SIZE) + 1)
+    local endTileY = math.min(tilesY, math.ceil(bottomRightWorldY / constants.TILE_SIZE) + 1)
+
+    for x = startTileX, endTileX do
+        for y = startTileY, endTileY do
             if chickens[x] and chickens[x][y] and chickens[x][y].alive then
                 local chick = chickens[x][y]
                 local distance = lume.distance(chick.worldX, chick.worldY, playerX, playerY)
@@ -482,9 +511,9 @@ function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, 
         end
     end
 
-    -- Second pass: draw all chickens, highlight the closest one
-    for x = 1, tilesX do
-        for y = 1, tilesY do
+    -- Second pass: draw chickens in visible area, highlight the closest one
+    for x = startTileX, endTileX do
+        for y = startTileY, endTileY do
             if chickens[x] and chickens[x][y] then
                 local chick = chickens[x][y]
                 local isInteractable = (chick == closestChicken)

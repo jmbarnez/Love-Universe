@@ -10,6 +10,14 @@ local damage_effects = require("src.damage_effects")
 local inventory = require("src.inventory")
 local constants = require("src.constants")
 local context_menu = require("src.context_menu")
+local scroll = require("src.items.scroll")
+local gem = require("src.items.gem")
+local sword = require("src.items.sword")
+local potion = require("src.items.potion")
+local armor = require("src.items.armor")
+local bow = require("src.items.bow")
+local shield = require("src.items.shield")
+local mana_potion = require("src.items.mana_potion")
 local Camera = require("lib.hump.camera")
 local Timer = require("lib.hump.timer")
 local lume = require("lib.lume")
@@ -44,9 +52,9 @@ local gameState = {
 
 -- Initialize game
 function game.init()
-    -- Enable smooth rendering to reduce grid appearance
-    love.graphics.setDefaultFilter("linear", "linear")
-    love.graphics.setLineStyle("smooth")
+    -- Use nearest filtering to prevent sub-pixel rendering issues
+    love.graphics.setDefaultFilter("nearest", "nearest")
+    love.graphics.setLineStyle("rough")
 
     -- Disable any potential debug visuals that might show grids
     love.graphics.setWireframe(false)
@@ -99,12 +107,52 @@ function game.init()
     -- Initialize inventory
     gameState.inventory = inventory.create()
 
+    -- Initialize panel system
+    local screenWidth = constants.GAME_WIDTH
+    local screenHeight = constants.GAME_HEIGHT
+
+    -- Create and register panels
+    local equipmentPanel = inventory.EquipmentPanel.new(10, 100)
+    local hotbarPanel = inventory.HotbarPanel.new((screenWidth - 10 * 45) / 2, screenHeight - 60)
+
+    inventory.panelSystem.register("inventory", gameState.inventory)
+    inventory.panelSystem.register("equipment", equipmentPanel)
+    inventory.panelSystem.register("hotbar", hotbarPanel)
+
+    -- Add some test items to inventory
+    local feather = require("src.items.feather")
+    inventory.addItem(gameState.inventory, feather.new())
+    inventory.addItem(gameState.inventory, sword.createSword())
+    inventory.addItem(gameState.inventory, potion.createPotion())
+    inventory.addItem(gameState.inventory, potion.createPotion())  -- Add another potion to test stacking
+    inventory.addItem(gameState.inventory, armor.createArmor())
+
+    -- Add new items to showcase the icon system
+    inventory.addItem(gameState.inventory, bow.createBow())
+    inventory.addItem(gameState.inventory, shield.createShield())
+    inventory.addItem(gameState.inventory, mana_potion.createManaPotion())
+    inventory.addItem(gameState.inventory, scroll.createSpellScroll())
+    inventory.addItem(gameState.inventory, gem.createGem())
+
+    -- Add some items to equipment panel
+    equipmentPanel:addItem(sword.createSword())  -- Weapon slot (1)
+    equipmentPanel:addItem(armor.createArmor())  -- Armor slot (2)
+    equipmentPanel:addItem(shield.createShield()) -- Shield slot (4)
+
+    -- Add some items to hotbar
+    hotbarPanel:addItem(potion.createPotion())
+    hotbarPanel:addItem(mana_potion.createManaPotion())
+    hotbarPanel:addItem(scroll.createSpellScroll())
+
     -- Initialize UI system
     ui.init()
     
     -- Add startup messages to chat
     ui.addChatMessage("Welcome to Love2D RPG!", {0, 1, 0}) -- Green
-    ui.addChatMessage("Press F1 or ` to toggle console", {0.7, 0.7, 1}) -- Light blue
+    ui.addChatMessage("TAB: Inventory | C: Equipment | 1-0: Hotbar", {0.7, 0.7, 1}) -- Light blue
+    ui.addChatMessage("F1: Console | Drag items between panels!", {0.7, 0.7, 1}) -- Light blue
+    ui.addChatMessage("F10: Change resolution | F11: Toggle fullscreen", {0.7, 0.7, 1}) -- Light blue
+    ui.addChatMessage("+/-: UI Scale | Current: " .. game.getCurrentDisplayMode().name, {1, 0.8, 0}) -- Gold
 
 end
 
@@ -151,6 +199,11 @@ function game.update(dt)
     
     -- Update UI system
     ui.update(dt)
+
+    -- Update inventory system
+    if gameState.inventory then
+        inventory.update(dt)
+    end
 end
 
 -- Update chickens
@@ -197,14 +250,24 @@ function game.updateCamera(dt)
         local currentX, currentY = gameState.camera:position()
         local targetX = gameState.player.x
         local targetY = gameState.player.y
-        
+
         local newX = lume.lerp(currentX, targetX, constants.CAMERA_FOLLOW_SPEED * dt)
         local newY = lume.lerp(currentY, targetY, constants.CAMERA_FOLLOW_SPEED * dt)
+
+        -- Clamp camera to world bounds to prevent rendering outside world
+        -- Only clamp if the world is larger than the viewport, otherwise center the world
+        if constants.WORLD_WIDTH > constants.GAME_WIDTH then
+            newX = lume.clamp(newX, constants.GAME_WIDTH / 2, constants.WORLD_WIDTH - constants.GAME_WIDTH / 2)
+        else
+            newX = constants.WORLD_WIDTH / 2  -- Center camera in smaller world
+        end
         
-        -- Clamp camera to world bounds
-        newX = lume.clamp(newX, constants.GAME_WIDTH / 2, constants.WORLD_WIDTH - constants.GAME_WIDTH / 2)
-        newY = lume.clamp(newY, constants.GAME_HEIGHT / 2, constants.WORLD_HEIGHT - constants.GAME_HEIGHT / 2)
-        
+        if constants.WORLD_HEIGHT > constants.GAME_HEIGHT then
+            newY = lume.clamp(newY, constants.GAME_HEIGHT / 2, constants.WORLD_HEIGHT - constants.GAME_HEIGHT / 2)
+        else
+            newY = constants.WORLD_HEIGHT / 2  -- Center camera in smaller world
+        end
+
         gameState.camera:lookAt(newX, newY)
     end
 end
@@ -292,22 +355,43 @@ end
 -- Handle mouse input
 function game.handleMousePress(x, y, button)
     -- Handle UI clicks first
-    ui.mousepressed(x, y, button)
+    local uiConsumedClick = ui.mousepressed(x, y, button)
+    if uiConsumedClick then
+        return -- UI handled the click, don't process further
+    end
     
     -- Handle context menu clicks
     if gameState.contextMenu then
-        local selected_option = context_menu.handleClick(gameState.contextMenu, x, y)
-        if selected_option then
-            selected_option.action()
+        local insideMenu = context_menu.isPointInside(gameState.contextMenu, x, y)
+        if not insideMenu then
+            -- Click outside menu - close it
+            gameState.contextMenu = nil
+            return
         end
-        gameState.contextMenu = nil
+        -- Menu handles its own clicks through SUIT
         return
     end
 
-    -- Handle inventory clicks first (if inventory is visible)
-    if gameState.inventory.visible then
-        inventory.handleClick(gameState.inventory, x, y, button)
-        return -- Don't process other mouse events when inventory is open
+    -- Check if click is on any inventory panel (blocks world interaction)
+    local isOverInventory, panelId, panel = inventory.isMouseOverInventory(x, y)
+    if isOverInventory then
+        -- Handle inventory panel interactions
+        if panel and panel.slotAt then
+            local slotIndex = panel:slotAt(x, y)
+            if slotIndex and panel.items and panel.items[slotIndex] then
+                local mods = {
+                    lctrl = love.keyboard.isDown("lctrl"),
+                    rctrl = love.keyboard.isDown("rctrl")
+                }
+                
+                if button == 1 then
+                    inventory.startDrag(panel, slotIndex, x, y, mods.lctrl or mods.rctrl, panelId)
+                elseif button == 2 then
+                    inventory.showContextMenu(panel, slotIndex, x, y)
+                end
+            end
+        end
+        return -- Block world interaction
     end
 
     if button == 1 then -- Left-click
@@ -364,6 +448,11 @@ end
 -- Handle mouse release
 function game.handleMouseRelease(x, y, button)
     ui.mousereleased(x, y, button)
+
+    -- Handle drag completion
+    if button == 1 then
+        inventory.finishDrag(x, y)
+    end
 end
 
 -- Handle text input
@@ -374,21 +463,72 @@ end
 -- Handle keyboard input (WASD movement)
 function game.handleKeyPress(key)
     ui.keypressed(key)
-    
+
+    -- Handle inventory keyboard shortcuts first (if inventory is visible)
+    if gameState.inventory and gameState.inventory.visible then
+        if inventory.handleKeyPress(gameState.inventory, key, gameState) then
+            return -- Inventory handled the keypress
+        end
+    end
+
     if key == "escape" then
         love.event.quit()
     elseif key == "r" then
-        -- Respawn player at safe location
+        -- Respawn player at safe location (only if inventory not handling 'r')
         local spawnX, spawnY = world.findSafeSpawn(gameState.world)
         player.respawn(gameState.player, spawnX, spawnY)
         game.centerCamera()
     elseif key == "e" then
-        -- Try to attack nearby chickens
+        -- Try to attack nearby chickens (only if inventory not handling 'e')
         game.tryAttackChicken()
     elseif key == "tab" then
         -- Toggle inventory visibility
         inventory.toggle(gameState.inventory)
-    
+    elseif key == "c" then
+        -- Toggle equipment panel visibility
+        local equipmentPanel = inventory.panelSystem.getPanel("equipment")
+        if equipmentPanel then
+            equipmentPanel.visible = not equipmentPanel.visible
+        end
+    elseif key >= "1" and key <= "9" or key == "0" then
+        -- Hotbar shortcuts (1-9, 0)
+        local hotbarIndex = key == "0" and 10 or tonumber(key)
+        local hotbarPanel = inventory.panelSystem.getPanel("hotbar")
+        if hotbarPanel then
+            local item = hotbarPanel.items[hotbarIndex]
+            if item and item.onUse then
+                item.onUse(gameState.player, item)
+                ui.addChatMessage("Used: " .. (item.name or "Unknown Item"), {0, 1, 0})
+            end
+        end
+    elseif key == "f11" then
+        -- Toggle between windowed and fullscreen
+        local currentMode = constants.DISPLAY_CONFIG.current
+        local mode = constants.DISPLAY_CONFIG.modes[currentMode]
+        if mode.fullscreen then
+            game.setDisplayMode(2) -- Switch to windowed 1280x720
+        else
+            game.setDisplayMode(5) -- Switch to fullscreen desktop
+        end
+        ui.addChatMessage("Display mode: " .. game.getCurrentDisplayMode().name, {0, 1, 1})
+    elseif key == "f10" then
+        -- Cycle through display modes
+        local nextMode = constants.DISPLAY_CONFIG.current + 1
+        if nextMode > #constants.DISPLAY_CONFIG.modes then
+            nextMode = 1
+        end
+        game.setDisplayMode(nextMode)
+        ui.addChatMessage("Display mode: " .. game.getCurrentDisplayMode().name, {0, 1, 1})
+    elseif key == "kp+" or key == "=" then
+        -- Increase UI scale
+        game.setUIScale(constants.DISPLAY_CONFIG.uiScale + 0.1)
+        constants.updateUIScale()
+        ui.addChatMessage("UI Scale: " .. string.format("%.1f", constants.DISPLAY_CONFIG.uiScale), {1, 1, 0})
+    elseif key == "kp-" or key == "-" then
+        -- Decrease UI scale
+        game.setUIScale(constants.DISPLAY_CONFIG.uiScale - 0.1)
+        constants.updateUIScale()
+        ui.addChatMessage("UI Scale: " .. string.format("%.1f", constants.DISPLAY_CONFIG.uiScale), {1, 1, 0})
     end
 end
 
@@ -427,8 +567,27 @@ function game.draw()
     -- Player HUD
     hud.draw(gameState.player, gameState)
 
-    -- Draw inventory (if visible)
-    inventory.draw(gameState.inventory)
+    -- Draw all panels
+    if inventory.panelSystem and inventory.panelSystem.panels then
+        for panelId, panel in pairs(inventory.panelSystem.panels) do
+        if panel then
+            if panel.draw then
+                panel:draw()
+            else
+                -- Fallback for inventory panel
+                inventory.draw(panel)
+            end
+        end
+    end
+    end
+
+    -- Draw inventory tooltip
+    if gameState.inventory and gameState.inventory.visible then
+        inventory.drawTooltip(gameState.inventory)
+    end
+
+    -- Draw drag ghost (must be drawn after panels to appear on top)
+    inventory.drawDragGhost()
 
     -- Draw context menu
     context_menu.draw(gameState.contextMenu)
@@ -480,7 +639,7 @@ function game.updateAutoAttack(dt)
         return
     end
 
-    print("Updating auto attack...")
+    -- Debug: print("Updating auto attack...")  -- Commented out to reduce spam
 
     -- Find the current target if we don't have one
     if not gameState.playerTarget then
@@ -704,13 +863,64 @@ end
 -- Set window properties
 function game.setWindow()
     love.window.setTitle(constants.WINDOW_TITLE)
-    love.window.setMode(0, 0, {fullscreen = true, fullscreentype = "desktop"})
+    
+    -- Get current display mode
+    local mode = constants.DISPLAY_CONFIG.modes[constants.DISPLAY_CONFIG.current]
+    
+    if mode.fullscreen then
+        -- Fullscreen mode
+        love.window.setMode(mode.width, mode.height, {
+            fullscreen = true, 
+            fullscreentype = mode.fullscreentype or "desktop"
+        })
+    else
+        -- Windowed mode
+        love.window.setMode(mode.width, mode.height, {
+            fullscreen = false,
+            resizable = true,
+            minwidth = 800,
+            minheight = 600
+        })
+    end
 
     -- Update constants with actual screen dimensions
     constants.GAME_WIDTH = love.graphics.getWidth()
     constants.GAME_HEIGHT = love.graphics.getHeight()
+    
+    -- Update UI scaling based on new dimensions
+    constants.updateUIScale()
 
     love.graphics.setBackgroundColor(unpack(constants.BACKGROUND_COLOR))
+end
+
+-- Change display mode
+function game.setDisplayMode(modeIndex)
+    if modeIndex >= 1 and modeIndex <= #constants.DISPLAY_CONFIG.modes then
+        constants.DISPLAY_CONFIG.current = modeIndex
+        game.setWindow()
+    end
+end
+
+-- Get current display mode info
+function game.getCurrentDisplayMode()
+    return constants.DISPLAY_CONFIG.modes[constants.DISPLAY_CONFIG.current]
+end
+
+-- Set UI scale
+function game.setUIScale(scale)
+    constants.DISPLAY_CONFIG.uiScale = math.max(0.5, math.min(3.0, scale))
+end
+
+-- Get UI scale
+function game.getUIScale()
+    return constants.DISPLAY_CONFIG.uiScale
+end
+
+-- Handle window resize
+function game.onWindowResize(width, height)
+    constants.GAME_WIDTH = width
+    constants.GAME_HEIGHT = height
+    constants.updateUIScale()
 end
 
 return game

@@ -3,10 +3,27 @@
 
 local constants = {}
 
--- Window settings (will be updated to fullscreen dimensions)
-constants.GAME_WIDTH = 800
-constants.GAME_HEIGHT = 600
+-- Display Configuration
 constants.WINDOW_TITLE = "Love2D RPG"
+
+-- Window mode settings
+constants.DISPLAY_CONFIG = {
+    -- Available window modes
+    modes = {
+        {name = "Windowed 1024x768", width = 1024, height = 768, fullscreen = false},
+        {name = "Windowed 1280x720", width = 1280, height = 720, fullscreen = false},
+        {name = "Windowed 1600x900", width = 1600, height = 900, fullscreen = false},
+        {name = "Windowed 1920x1080", width = 1920, height = 1080, fullscreen = false},
+        {name = "Fullscreen Desktop", width = 0, height = 0, fullscreen = true, fullscreentype = "desktop"},
+        {name = "Fullscreen Exclusive", width = 0, height = 0, fullscreen = true, fullscreentype = "exclusive"}
+    },
+    current = 2, -- Default to 1280x720 windowed
+    uiScale = 1.0 -- UI scaling factor
+}
+
+-- Dynamic window dimensions (set at runtime)
+constants.GAME_WIDTH = 1280
+constants.GAME_HEIGHT = 720
 
 -- World settings (now pixel-based)
 constants.WORLD_WIDTH = 1600  -- Total world width in pixels
@@ -79,16 +96,27 @@ constants.PALM_COLOR = {0.4, 0.7, 0.1}
 constants.HEALTH_BAR_WIDTH = 200
 constants.HEALTH_BAR_HEIGHT = 20
 
--- UI scaling factor (adjusts UI elements based on screen resolution)
--- Higher values = larger UI elements, lower values = smaller UI elements
-constants.UI_SCALE = constants.GAME_HEIGHT / 600  -- Scale based on 600px base height
+-- UI scaling - will be updated at runtime
+constants.UI_SCALE = 1.0
+constants.HUD_BAR_WIDTH = 200
+constants.HUD_BAR_HEIGHT = 20
+constants.HUD_BAR_SPACING = 30
+constants.HUD_START_Y = 20
+constants.HUD_MARGIN_X = 10
 
--- HUD bar settings (scaled versions)
-constants.HUD_BAR_WIDTH = 200 * constants.UI_SCALE
-constants.HUD_BAR_HEIGHT = 20 * constants.UI_SCALE
-constants.HUD_BAR_SPACING = 30 * constants.UI_SCALE
-constants.HUD_START_Y = 20 * constants.UI_SCALE
-constants.HUD_MARGIN_X = 10 * constants.UI_SCALE
+-- Function to update UI scaling
+function constants.updateUIScale()
+    -- Combine automatic scaling with manual scaling factor
+    local autoScale = math.min(constants.GAME_WIDTH / 1280, constants.GAME_HEIGHT / 720)
+    constants.UI_SCALE = autoScale * constants.DISPLAY_CONFIG.uiScale
+    
+    -- Update scaled UI values
+    constants.HUD_BAR_WIDTH = math.floor(200 * constants.UI_SCALE)
+    constants.HUD_BAR_HEIGHT = math.floor(20 * constants.UI_SCALE)
+    constants.HUD_BAR_SPACING = math.floor(30 * constants.UI_SCALE)
+    constants.HUD_START_Y = math.floor(20 * constants.UI_SCALE)
+    constants.HUD_MARGIN_X = math.floor(10 * constants.UI_SCALE)
+end
 
 -- Graphics settings
 constants.BACKGROUND_COLOR = {0.1, 0.1, 0.1}

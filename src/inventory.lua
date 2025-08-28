@@ -1,36 +1,542 @@
--- Inventory module for Love2D RPG
--- Handles player inventory with grid-based UI
+-- Enhanced Inventory module for Love2D RPG
+-- Handles player inventory with advanced drag & drop, context menus, and tooltips
 
 local inventory = {}
 local constants = require("src.constants")
+local ui = require("src.ui")
+local suit = require("lib.suit")
 
--- Inventory constants
-local SLOT_SIZE = 40
-local SLOT_PADDING = 2
+-- Inventory constants (scaled)
+local SLOT_SIZE = 40 * constants.UI_SCALE
+local SLOT_PADDING = 2 * constants.UI_SCALE
 local SLOT_ROWS = 6
 local SLOT_COLS = 4
 local TOTAL_SLOTS = SLOT_ROWS * SLOT_COLS
-local INVENTORY_MARGIN = 10
+local INVENTORY_MARGIN = 10 * constants.UI_SCALE
 
--- Inventory colors
+-- Inventory colors (will be overridden by UI theme)
 local SLOT_BG_COLOR = {0.2, 0.2, 0.2, 0.9}
 local SLOT_BORDER_COLOR = {0.5, 0.5, 0.5, 1}
 local SLOT_HOVER_COLOR = {0.3, 0.3, 0.3, 1}
 local WINDOW_BG_COLOR = {0.1, 0.1, 0.1, 0.8}
 
--- Create a new inventory
-function inventory.create()
-    local inv = {
-        items = {},
-        visible = false,
-        hoveredSlot = nil
-    }
+-- Panel system for multi-panel support
+local panelSystem = {
+    panels = {},
+    activePanel = nil
+}
+
+-- Base panel class
+local BasePanel = {}
+BasePanel.__index = BasePanel
+
+function BasePanel.new(id, x, y, rows, cols)
+    local self = setmetatable({}, BasePanel)
+    self.id = id
+    self.x = x
+    self.y = y
+    self.rows = rows
+    self.cols = cols
+    self.items = {}
+    self.visible = false
+    self.slotSize = 40 * constants.UI_SCALE
+    self.slotPadding = 2 * constants.UI_SCALE
 
     -- Initialize empty slots
-    for i = 1, TOTAL_SLOTS do
-        inv.items[i] = nil
+    for i = 1, rows * cols do
+        self.items[i] = nil
     end
 
+    return self
+end
+
+-- Get slot rectangle for a given slot index
+function BasePanel:getSlotRect(slotIndex)
+    if not self.visible then return nil end
+
+    local col = (slotIndex - 1) % self.cols
+    local row = math.floor((slotIndex - 1) / self.cols)
+    local slotX = self.x + col * (self.slotSize + self.slotPadding)
+    local slotY = self.y + row * (self.slotSize + self.slotPadding)
+
+    return slotX, slotY, self.slotSize, self.slotSize
+end
+
+-- Get slot index at screen coordinates
+function BasePanel:slotAt(x, y)
+    if not self.visible then return nil end
+
+    for i = 1, self.rows * self.cols do
+        local slotX, slotY, slotW, slotH = self:getSlotRect(i)
+        if x >= slotX and x <= slotX + slotW and y >= slotY and y <= slotY + slotH then
+            return i
+        end
+    end
+    return nil
+end
+
+-- Check if an item can be placed in a specific slot
+function BasePanel:canPlace(item, targetIndex, sourceIndex)
+    if not targetIndex or targetIndex < 1 or targetIndex > self.rows * self.cols then
+        return false, "Invalid slot"
+    end
+
+    if not item then
+        return true, "Empty item can always be placed"
+    end
+
+    local targetItem = self.items[targetIndex]
+
+    -- If target slot is empty, can always place
+    if not targetItem then
+        return true, "Slot is empty"
+    end
+
+    -- If same item and both are stackable, check if we can merge
+    if targetItem.name == item.name and targetItem.stackable then
+        local maxStack = targetItem.stackMax or 99
+        local currentStack = targetItem.count or 1
+        local newStack = currentStack + (item.count or 1)
+
+        if newStack <= maxStack then
+            return true, "Can merge stacks"
+        else
+            return false, "Stack would exceed maximum (" .. maxStack .. ")"
+        end
+    end
+
+    -- Different items - can swap unless it's the same slot
+    if sourceIndex and sourceIndex == targetIndex then
+        return false, "Cannot place on same slot"
+    end
+
+    return true, "Can swap items"
+end
+
+-- Move or merge items between slots within the same panel
+function BasePanel:moveOrMerge(fromIndex, toIndex, quantity)
+    if not fromIndex or not toIndex or fromIndex == toIndex then
+        return false, "Invalid move operation"
+    end
+
+    local sourceItem = self.items[fromIndex]
+    if not sourceItem then
+        return false, "No item to move"
+    end
+
+    -- If no quantity specified, move entire stack
+    if not quantity then
+        quantity = sourceItem.count or 1
+    end
+
+    -- Can't move more than available
+    if quantity > (sourceItem.count or 1) then
+        return false, "Not enough items"
+    end
+
+    local targetItem = self.items[toIndex]
+    local canPlace, reason = self:canPlace(sourceItem, toIndex, fromIndex)
+
+    if not canPlace then
+        return false, reason
+    end
+
+    -- Handle stacking
+    if targetItem and targetItem.name == sourceItem.name and sourceItem.stackable then
+        -- Merge stacks
+        local maxStack = targetItem.stackMax or 99
+        local spaceAvailable = maxStack - (targetItem.count or 1)
+        local amountToMove = math.min(quantity, spaceAvailable)
+
+        targetItem.count = (targetItem.count or 1) + amountToMove
+
+        -- Reduce source stack
+        if quantity >= (sourceItem.count or 1) then
+            -- Moved entire stack
+            self.items[fromIndex] = nil
+        else
+            sourceItem.count = (sourceItem.count or 1) - amountToMove
+        end
+
+        return true, "Merged stacks"
+    else
+        -- Swap or place items
+        if quantity >= (sourceItem.count or 1) then
+            -- Moving entire stack
+            self.items[toIndex] = sourceItem
+            self.items[fromIndex] = targetItem  -- Could be nil
+        else
+            -- Splitting stack - create new item for target
+            local newItem = {}
+            for k, v in pairs(sourceItem) do
+                newItem[k] = v
+            end
+            newItem.count = quantity
+            self.items[toIndex] = newItem
+
+            -- Reduce source stack
+            sourceItem.count = (sourceItem.count or 1) - quantity
+        end
+
+        return true, "Moved items"
+    end
+end
+
+-- Add item to panel
+function BasePanel:addItem(item)
+    -- Try to stack with existing items
+    if item.stackable then
+        for i = 1, self.rows * self.cols do
+            if self.items[i] and self.items[i].name == item.name then
+                self.items[i].count = (self.items[i].count or 1) + (item.count or 1)
+                return true -- Item stacked
+            end
+        end
+    end
+
+    -- Find first empty slot
+    for i = 1, self.rows * self.cols do
+        if not self.items[i] then
+            self.items[i] = item
+            if not self.items[i].count then self.items[i].count = 1 end
+            return true -- Item added successfully
+        end
+    end
+    return false -- Panel full
+end
+
+-- Register a panel with the system
+function panelSystem.register(panelId, panel)
+    panelSystem.panels[panelId] = panel
+end
+
+-- Get panel by ID
+function panelSystem.getPanel(panelId)
+    return panelSystem.panels[panelId]
+end
+
+-- Equipment Panel class
+local EquipmentPanel = setmetatable({}, BasePanel)
+EquipmentPanel.__index = EquipmentPanel
+
+function EquipmentPanel.new(x, y)
+    local self = BasePanel.new("equipment", x, y, 4, 2)  -- 4 rows, 2 cols for equipment slots
+    setmetatable(self, EquipmentPanel)
+
+    -- Equipment slot types
+    self.slotTypes = {
+        [1] = "helmet",
+        [2] = "armor",
+        [3] = "weapon",
+        [4] = "shield",
+        [5] = "boots",
+        [6] = "accessory",
+        [7] = "ring",
+        [8] = "amulet"
+    }
+
+    return self
+end
+
+-- Override canPlace to check equipment type compatibility
+function EquipmentPanel:canPlace(item, targetIndex, sourceIndex)
+    if not targetIndex or targetIndex < 1 or targetIndex > 8 then
+        return false, "Invalid equipment slot"
+    end
+
+    if not item then
+        return true, "Empty item can always be placed"
+    end
+
+    local slotType = self.slotTypes[targetIndex]
+    local itemType = item.type
+
+    -- Check if item type matches slot type
+    if itemType ~= slotType then
+        return false, "Item type '" .. (itemType or "unknown") .. "' doesn't fit in " .. slotType .. " slot"
+    end
+
+    -- Check if slot is already occupied
+    local targetItem = self.items[targetIndex]
+    if targetItem then
+        return false, "Equipment slot is already occupied"
+    end
+
+    return true, "Can equip item"
+end
+
+-- Draw equipment panel
+function EquipmentPanel:draw()
+    if not self.visible then return end
+
+    local colors = (ui and ui.uiState and ui.uiState.theme and ui.uiState.theme.colors) or {
+        background = {0.1, 0.1, 0.1, 0.8},
+        border = {0.4, 0.3, 0.2, 1.0},
+        panel = {0.12, 0.12, 0.18, 0.9},
+        accent = {0.6, 0.4, 0.2, 1.0},
+        text = {0.9, 0.85, 0.8, 1.0}
+    }
+
+    -- Get drag state safely
+    local currentDragState = inventory.getDragStateForPanel()
+
+    -- Calculate panel dimensions
+    local panelWidth = (self.cols * self.slotSize) + ((self.cols - 1) * self.slotPadding) + (self.slotSize)  -- Extra space for labels
+    local panelHeight = (self.rows * self.slotSize) + ((self.rows - 1) * self.slotPadding) + 40  -- Extra space for title
+
+    -- Draw panel background
+    love.graphics.setColor(colors.background)
+    ui.drawRoundedRect(self.x - 10, self.y - 30, panelWidth, panelHeight, 8)
+
+    -- Draw panel border
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(self.x - 10, self.y - 30, panelWidth, panelHeight, 8)
+    love.graphics.setLineWidth(1)
+
+    -- Draw title
+    love.graphics.setColor(colors.text)
+    love.graphics.printf("EQUIPMENT", self.x - 10, self.y - 25, panelWidth, "center")
+
+    -- Draw equipment slots
+    for row = 1, self.rows do
+        for col = 1, self.cols do
+            local slotIndex = (row - 1) * self.cols + col
+            local slotX = self.x + (col - 1) * (self.slotSize + self.slotPadding)
+            local slotY = self.y + (row - 1) * (self.slotSize + self.slotPadding)
+
+            -- Draw slot background
+            local slotColor = colors.panel
+            if currentDragState and currentDragState.targetPanel == "equipment" and currentDragState.targetIndex == slotIndex then
+                if currentDragState.valid then
+                    slotColor = {0, 0.8, 0, 0.7}
+                else
+                    slotColor = {0.8, 0, 0, 0.7}
+                end
+            end
+
+            love.graphics.setColor(slotColor)
+            ui.drawRoundedRect(slotX, slotY, self.slotSize, self.slotSize, 3)
+
+            -- Draw slot border
+            love.graphics.setColor(colors.border)
+            love.graphics.setLineWidth(1)
+            ui.drawRoundedRectOutline(slotX, slotY, self.slotSize, self.slotSize, 3)
+
+            -- Draw equipment type label
+            if self.slotTypes[slotIndex] then
+                love.graphics.setColor(colors.text)
+                local label = self.slotTypes[slotIndex]:upper()
+                love.graphics.printf(label, slotX, slotY + self.slotSize + 2, self.slotSize, "center")
+            end
+
+            -- Draw item if present
+            local item = self.items[slotIndex]
+            if item then
+                -- Draw item icon
+                if item.icon then
+                    love.graphics.setColor(1, 1, 1, 1)
+                    local iconScale = (self.slotSize - 4) / 32
+                    love.graphics.draw(item.icon, slotX + 2, slotY + 2, 0, iconScale, iconScale)
+                else
+                    local itemColor = item.color or {0.8, 0.8, 0.8, 1}
+                    love.graphics.setColor(itemColor)
+                    ui.drawRoundedRect(slotX + 2, slotY + 2, self.slotSize - 4, self.slotSize - 4, 2)
+                end
+            end
+        end
+    end
+end
+
+-- Hotbar Panel class
+local HotbarPanel = setmetatable({}, BasePanel)
+HotbarPanel.__index = HotbarPanel
+
+function HotbarPanel.new(x, y)
+    local self = BasePanel.new("hotbar", x, y, 1, 10)  -- 1 row, 10 cols for quick access
+    setmetatable(self, HotbarPanel)
+
+    self.visible = true  -- Hotbar is always visible
+
+    return self
+end
+
+-- Override canPlace to allow any item in hotbar
+function HotbarPanel:canPlace(item, targetIndex, sourceIndex)
+    if not targetIndex or targetIndex < 1 or targetIndex > 10 then
+        return false, "Invalid hotbar slot"
+    end
+
+    return true, "Can place in hotbar"
+end
+
+-- Draw hotbar (simplified version)
+function HotbarPanel:draw()
+    if not self.visible then return end
+
+    local colors = (ui and ui.uiState and ui.uiState.theme and ui.uiState.theme.colors) or {
+        background = {0.1, 0.1, 0.1, 0.8},
+        border = {0.4, 0.3, 0.2, 1.0},
+        panel = {0.12, 0.12, 0.18, 0.9},
+        accent = {0.6, 0.4, 0.2, 1.0},
+        text = {0.9, 0.85, 0.8, 1.0}
+    }
+
+    -- Get drag state safely
+    local currentDragState = inventory.getDragStateForPanel()
+
+    -- Draw hotbar background
+    love.graphics.setColor(colors.background)
+    ui.drawRoundedRect(self.x - 5, self.y - 5, self.cols * (self.slotSize + self.slotPadding) + 10, self.slotSize + 10, 4)
+
+    -- Draw hotbar slots
+    for i = 1, self.cols do
+        local slotX, slotY, slotW, slotH = self:getSlotRect(i)
+        local item = self.items[i]
+
+        -- Draw slot background
+        local slotColor = colors.panel
+        if currentDragState and currentDragState.targetPanel == "hotbar" and currentDragState.targetIndex == i then
+            if currentDragState.valid then
+                slotColor = {0, 0.8, 0, 0.7}
+            else
+                slotColor = {0.8, 0, 0, 0.7}
+            end
+        end
+
+        love.graphics.setColor(slotColor)
+        ui.drawRoundedRect(slotX, slotY, slotW, slotH, 3)
+
+        -- Draw slot border
+        love.graphics.setColor(colors.border)
+        love.graphics.setLineWidth(1)
+        ui.drawRoundedRectOutline(slotX, slotY, slotW, slotH, 3)
+
+        -- Draw item if present
+        if item then
+            -- Draw item icon
+            if item.icon then
+                -- Draw the actual icon image
+                love.graphics.setColor(1, 1, 1, 1)
+                local iconScale = (slotW - 4) / 32  -- Scale to fit slot (32x32 icons)
+                love.graphics.draw(item.icon, slotX + 2, slotY + 2, 0, iconScale, iconScale)
+            else
+                -- Fallback: draw colored rectangle if no icon
+                local itemColor = item.color or {0.8, 0.8, 0.8, 1}
+                love.graphics.setColor(itemColor)
+                ui.drawRoundedRect(slotX + 2, slotY + 2, slotW - 4, slotH - 4, 2)
+            end
+
+            -- Draw item count if stackable
+            if item.count and item.count > 1 then
+                love.graphics.setColor(colors.text)
+                local countText = tostring(item.count)
+                local font = love.graphics.getFont()
+                local textWidth = font:getWidth(countText)
+                love.graphics.print(countText, slotX + slotW - textWidth - 1, slotY + slotH - 15)
+            end
+        end
+
+        -- Draw hotbar number
+        love.graphics.setColor(colors.text)
+        local numberText = tostring(i)
+        if i == 10 then numberText = "0" end
+        love.graphics.print(numberText, slotX + 2, slotY + 2)
+    end
+end
+
+-- Handle drag between panels
+function panelSystem.moveBetweenPanels(fromPanel, fromIndex, toPanel, toIndex, quantity)
+    local sourceItem = fromPanel.items[fromIndex]
+    if not sourceItem then
+        return false, "No item to move"
+    end
+
+    -- If no quantity specified, move entire stack
+    if not quantity then
+        quantity = sourceItem.count or 1
+    end
+
+    -- Can't move more than available
+    if quantity > (sourceItem.count or 1) then
+        return false, "Not enough items"
+    end
+
+    local targetItem = toPanel.items[toIndex]
+    local canPlace, reason = toPanel:canPlace(sourceItem, toIndex, nil)
+
+    if not canPlace then
+        return false, reason
+    end
+
+    -- Handle stacking
+    if targetItem and targetItem.name == sourceItem.name and sourceItem.stackable then
+        -- Merge stacks
+        local maxStack = targetItem.stackMax or 99
+        local spaceAvailable = maxStack - (targetItem.count or 1)
+        local amountToMove = math.min(quantity, spaceAvailable)
+
+        targetItem.count = (targetItem.count or 1) + amountToMove
+
+        -- Reduce source stack
+        if quantity >= (sourceItem.count or 1) then
+            -- Moved entire stack
+            fromPanel.items[fromIndex] = nil
+        else
+            sourceItem.count = (sourceItem.count or 1) - amountToMove
+        end
+
+        return true, "Merged stacks"
+    else
+        -- Swap or place items
+        if quantity >= (sourceItem.count or 1) then
+            -- Moving entire stack
+            toPanel.items[toIndex] = sourceItem
+            fromPanel.items[fromIndex] = targetItem  -- Could be nil
+        else
+            -- Splitting stack - create new item for target
+            local newItem = {}
+            for k, v in pairs(sourceItem) do
+                newItem[k] = v
+            end
+            newItem.count = quantity
+            toPanel.items[toIndex] = newItem
+
+            -- Reduce source stack
+            sourceItem.count = (sourceItem.count or 1) - quantity
+        end
+
+        return true, "Moved items"
+    end
+end
+
+-- Drag state (enhanced for multi-panel)
+local dragState = {
+    active = false,
+    item = nil,
+    quantity = nil,
+    fromPanel = nil,
+    fromIndex = nil,
+    offsetX = 0,
+    offsetY = 0,
+    valid = false,
+    targetPanel = nil,
+    targetIndex = nil
+}
+
+-- Hover state for tooltips
+local hoverState = {
+    slotIndex = nil,
+    time = 0,
+    tooltipDelay = 0.15  -- seconds before showing tooltip
+}
+
+-- Create a new inventory
+function inventory.create()
+    -- Create inventory as a BasePanel to work with the panel system
+    local inv = BasePanel.new("inventory", 50, 50, SLOT_ROWS, SLOT_COLS)
+    inv.visible = false
+    inv.hoveredSlot = nil
     return inv
 end
 
@@ -90,31 +596,314 @@ function inventory.toggle(inv)
     inv.visible = not inv.visible
 end
 
--- Draw inventory UI
-function inventory.draw(inv)
-    if not inv.visible then return end
+-- Get slot rectangle for a given slot index
+function inventory.getSlotRect(inv, i)
+    if not inv.visible then return nil end
 
     local screenWidth = love.graphics.getWidth()
     local screenHeight = love.graphics.getHeight()
 
     -- Calculate inventory dimensions
     local inventoryWidth = (SLOT_COLS * SLOT_SIZE) + ((SLOT_COLS - 1) * SLOT_PADDING) + (INVENTORY_MARGIN * 2)
-    local inventoryHeight = (SLOT_ROWS * SLOT_SIZE) + ((SLOT_ROWS - 1) * SLOT_PADDING) + (INVENTORY_MARGIN * 2) + 30 -- Extra space for title
+    local inventoryHeight = (SLOT_ROWS * SLOT_SIZE) + ((SLOT_ROWS - 1) * SLOT_PADDING) + (INVENTORY_MARGIN * 2) + 30
 
     -- Position in bottom right
     local inventoryX = screenWidth - inventoryWidth - 10
     local inventoryY = screenHeight - inventoryHeight - 10
 
-    -- Draw inventory background
-    love.graphics.setColor(WINDOW_BG_COLOR)
-    love.graphics.rectangle("fill", inventoryX, inventoryY, inventoryWidth, inventoryHeight)
+    -- Calculate slot position
+    local col = (i - 1) % SLOT_COLS
+    local row = math.floor((i - 1) / SLOT_COLS)
+    local slotX = inventoryX + INVENTORY_MARGIN + (col * (SLOT_SIZE + SLOT_PADDING))
+    local slotY = inventoryY + INVENTORY_MARGIN + 25 + (row * (SLOT_SIZE + SLOT_PADDING))  -- Account for title
+
+    return slotX, slotY, SLOT_SIZE, SLOT_SIZE
+end
+
+-- Get slot index at screen coordinates
+function inventory.slotAt(inv, x, y)
+    if not inv.visible then return nil end
+
+    for i = 1, TOTAL_SLOTS do
+        local slotX, slotY, slotW, slotH = inventory.getSlotRect(inv, i)
+        if x >= slotX and x <= slotX + slotW and y >= slotY and y <= slotY + slotH then
+            return i
+        end
+    end
+    return nil
+end
+
+-- Check if an item can be placed in a specific slot
+function inventory.canPlace(inv, item, targetIndex, sourceIndex)
+    if not targetIndex or targetIndex < 1 or targetIndex > TOTAL_SLOTS then
+        return false, "Invalid slot"
+    end
+
+    if not item then
+        return true, "Empty item can always be placed"
+    end
+
+    local targetItem = inv.items[targetIndex]
+
+    -- If target slot is empty, can always place
+    if not targetItem then
+        return true, "Slot is empty"
+    end
+
+    -- If same item and both are stackable, check if we can merge
+    if targetItem.name == item.name and targetItem.stackable then
+        local maxStack = targetItem.stackMax or 99
+        local currentStack = targetItem.count or 1
+        local newStack = currentStack + (item.count or 1)
+
+        if newStack <= maxStack then
+            return true, "Can merge stacks"
+        else
+            return false, "Stack would exceed maximum (" .. maxStack .. ")"
+        end
+    end
+
+    -- Different items - can swap unless it's the same slot
+    if sourceIndex and sourceIndex == targetIndex then
+        return false, "Cannot place on same slot"
+    end
+
+    return true, "Can swap items"
+end
+
+-- Move or merge items between slots
+function inventory.moveOrMerge(inv, fromIndex, toIndex, quantity)
+    if not fromIndex or not toIndex or fromIndex == toIndex then
+        return false, "Invalid move operation"
+    end
+
+    local sourceItem = inv.items[fromIndex]
+    if not sourceItem then
+        return false, "No item to move"
+    end
+
+    -- If no quantity specified, move entire stack
+    if not quantity then
+        quantity = sourceItem.count or 1
+    end
+
+    -- Can't move more than available
+    if quantity > (sourceItem.count or 1) then
+        return false, "Not enough items"
+    end
+
+    local targetItem = inv.items[toIndex]
+    local canPlace, reason = inventory.canPlace(inv, sourceItem, toIndex, fromIndex)
+
+    if not canPlace then
+        return false, reason
+    end
+
+    -- Handle stacking
+    if targetItem and targetItem.name == sourceItem.name and sourceItem.stackable then
+        -- Merge stacks
+        local maxStack = targetItem.stackMax or 99
+        local spaceAvailable = maxStack - (targetItem.count or 1)
+        local amountToMove = math.min(quantity, spaceAvailable)
+
+        targetItem.count = (targetItem.count or 1) + amountToMove
+
+        -- Reduce source stack
+        if quantity >= (sourceItem.count or 1) then
+            -- Moved entire stack
+            inv.items[fromIndex] = nil
+        else
+            sourceItem.count = (sourceItem.count or 1) - amountToMove
+        end
+
+        return true, "Merged stacks"
+    else
+        -- Swap or place items
+        if quantity >= (sourceItem.count or 1) then
+            -- Moving entire stack
+            inv.items[toIndex] = sourceItem
+            inv.items[fromIndex] = targetItem  -- Could be nil
+        else
+            -- Splitting stack - create new item for target
+            local newItem = {}
+            for k, v in pairs(sourceItem) do
+                newItem[k] = v
+            end
+            newItem.count = quantity
+            inv.items[toIndex] = newItem
+
+            -- Reduce source stack
+            sourceItem.count = (sourceItem.count or 1) - quantity
+        end
+
+        return true, "Moved items"
+    end
+end
+
+-- Get current drag state (for external access)
+function inventory.getDragState()
+    return dragState
+end
+
+-- Get drag state for panel rendering (safe access)
+function inventory.getDragStateForPanel()
+    return dragState.active and dragState or nil
+end
+
+-- Clear drag state
+function inventory.clearDragState()
+    dragState.active = false
+    dragState.item = nil
+    dragState.quantity = nil
+    dragState.fromIndex = nil
+    dragState.valid = false
+    dragState.targetIndex = nil
+end
+
+-- Start dragging an item (enhanced for multi-panel)
+function inventory.startDrag(panel, slotIndex, mouseX, mouseY, ctrlPressed, panelId)
+    local item = panel.items[slotIndex]
+    if not item then return false end
+
+    local slotX, slotY, slotW, slotH = panel:getSlotRect(slotIndex)
+    dragState.active = true
+    dragState.item = item
+    dragState.fromPanel = panelId or "inventory"
+    dragState.fromIndex = slotIndex
+    dragState.offsetX = mouseX - slotX - slotW/2
+    dragState.offsetY = mouseY - slotY - slotH/2
+
+    -- Handle splitting
+    if ctrlPressed and item.count and item.count > 1 then
+        dragState.quantity = math.ceil(item.count / 2)
+    else
+        dragState.quantity = item.count or 1
+    end
+
+    return true
+end
+
+-- Update drag target (enhanced for multi-panel)
+function inventory.updateDragTarget(mouseX, mouseY)
+    if not dragState.active then return end
+
+    -- Check all registered panels for target
+    for panelId, panel in pairs(panelSystem.panels) do
+        if panel.visible then
+            local targetIndex = panel:slotAt(mouseX, mouseY)
+            if targetIndex then
+                -- Create a temporary item for validation
+                local tempItem = {
+                    name = dragState.item.name,
+                    count = dragState.quantity,
+                    stackable = dragState.item.stackable,
+                    stackMax = dragState.item.stackMax,
+                    type = dragState.item.type
+                }
+                dragState.valid, _ = panel:canPlace(tempItem, targetIndex, nil)
+                dragState.targetPanel = panelId
+                dragState.targetIndex = targetIndex
+                return
+            end
+        end
+    end
+
+    -- No valid target found
+    dragState.valid = false
+    dragState.targetPanel = nil
+    dragState.targetIndex = nil
+end
+
+-- Finish drag operation (enhanced for multi-panel)
+function inventory.finishDrag(mouseX, mouseY)
+    if not dragState.active then return end
+
+    if dragState.targetIndex and dragState.valid then
+        local fromPanel = panelSystem.getPanel(dragState.fromPanel)
+        local toPanel = panelSystem.getPanel(dragState.targetPanel)
+
+        if fromPanel and toPanel then
+            local success, message
+            if dragState.fromPanel == dragState.targetPanel then
+                -- Same panel movement
+                success, message = fromPanel:moveOrMerge(dragState.fromIndex, dragState.targetIndex, dragState.quantity)
+            else
+                -- Cross-panel movement
+                success, message = panelSystem.moveBetweenPanels(fromPanel, dragState.fromIndex, toPanel, dragState.targetIndex, dragState.quantity)
+            end
+
+            if success then
+                ui.addChatMessage("Item moved: " .. message, {0.8, 0.8, 1})
+            else
+                ui.addChatMessage("Cannot move item: " .. message, {1, 0.5, 0.5})
+            end
+        end
+    else
+        -- No valid target found - drop the item (RuneScape style)
+        local fromPanel = panelSystem.getPanel(dragState.fromPanel)
+        if fromPanel and dragState.fromIndex and dragState.item then
+            -- Drop the item
+            if dragState.quantity and dragState.quantity < (dragState.item.count or 1) then
+                -- Dropping partial stack
+                dragState.item.count = dragState.item.count - dragState.quantity
+                ui.addChatMessage("Dropped " .. dragState.quantity .. " " .. (dragState.item.name or "items"), {0.8, 0.6, 0.4})
+            else
+                -- Drop entire item
+                fromPanel.items[dragState.fromIndex] = nil
+                ui.addChatMessage("Dropped " .. (dragState.item.name or "item"), {0.8, 0.6, 0.4})
+            end
+        end
+    end
+
+    inventory.clearDragState()
+end
+
+-- Draw inventory UI with enhanced features
+function inventory.draw(inv)
+    if not inv.visible then return end
+
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+
+    -- Safety check for screen dimensions
+    if not screenWidth or not screenHeight or screenWidth <= 0 or screenHeight <= 0 then
+        return
+    end
+
+    -- Safety check for constants
+    if not SLOT_SIZE or not SLOT_COLS or not SLOT_ROWS or not SLOT_PADDING or not INVENTORY_MARGIN then
+        return
+    end
+
+    -- Calculate inventory dimensions
+    local inventoryWidth = (SLOT_COLS * SLOT_SIZE) + ((SLOT_COLS - 1) * SLOT_PADDING) + (INVENTORY_MARGIN * 2)
+    local inventoryHeight = (SLOT_ROWS * SLOT_SIZE) + ((SLOT_ROWS - 1) * SLOT_PADDING) + (INVENTORY_MARGIN * 2) + 30
+
+    -- Position in bottom right
+    local inventoryX = screenWidth - inventoryWidth - 10
+    local inventoryY = screenHeight - inventoryHeight - 10
+
+    -- Get UI theme colors
+    local colors = (ui and ui.uiState and ui.uiState.theme and ui.uiState.theme.colors) or {
+        background = {0.1, 0.1, 0.1, 0.8},
+        border = {0.4, 0.3, 0.2, 1.0},
+        text = {0.9, 0.85, 0.8, 1.0},
+        panel = {0.12, 0.12, 0.18, 0.9},
+        accent = {0.6, 0.4, 0.2, 1.0}
+    }
+
+    -- Draw inventory background with rounded corners
+    love.graphics.setColor(colors.background)
+    ui.drawRoundedRect(inventoryX, inventoryY, inventoryWidth, inventoryHeight, 8)
 
     -- Draw inventory border
-    love.graphics.setColor(0.7, 0.7, 0.7, 1)
-    love.graphics.rectangle("line", inventoryX, inventoryY, inventoryWidth, inventoryHeight)
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(inventoryX, inventoryY, inventoryWidth, inventoryHeight, 8)
+    love.graphics.setLineWidth(1)
 
     -- Draw title
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(colors.text)
     local title = "INVENTORY"
     local font = love.graphics.getFont()
     local titleWidth = font:getWidth(title)
@@ -132,94 +921,494 @@ function inventory.draw(inv)
 
             -- Check if mouse is hovering over this slot
             local mouseX, mouseY = love.mouse.getPosition()
-            local isHovered = mouseX >= currentSlotX and mouseX <= currentSlotX + SLOT_SIZE and
-                             mouseY >= currentSlotY and mouseY <= currentSlotY + SLOT_SIZE
-
-            -- Draw slot background
-            if isHovered then
-                love.graphics.setColor(SLOT_HOVER_COLOR)
-            else
-                love.graphics.setColor(SLOT_BG_COLOR)
+            local isHovered = false
+            if mouseX and mouseY and currentSlotX and currentSlotY and SLOT_SIZE then
+                isHovered = mouseX >= currentSlotX and mouseX <= currentSlotX + SLOT_SIZE and
+                           mouseY >= currentSlotY and mouseY <= currentSlotY + SLOT_SIZE
             end
-            love.graphics.rectangle("fill", currentSlotX, currentSlotY, SLOT_SIZE, SLOT_SIZE)
+
+            -- Determine slot color based on state
+            local slotColor = colors.panel
+            if isHovered then
+                slotColor = colors.accent
+                hoverState.slotIndex = slotIndex
+            elseif dragState.targetIndex == slotIndex then
+                -- Target highlight for drag operation
+                if dragState.valid then
+                    slotColor = {0, 0.8, 0, 0.7}  -- Green for valid
+                else
+                    slotColor = {0.8, 0, 0, 0.7}  -- Red for invalid
+                end
+            end
+
+            -- Draw slot background with rounded corners
+            love.graphics.setColor(slotColor)
+            ui.drawRoundedRect(currentSlotX, currentSlotY, SLOT_SIZE, SLOT_SIZE, 4)
 
             -- Draw slot border
-            love.graphics.setColor(SLOT_BORDER_COLOR)
-            love.graphics.rectangle("line", currentSlotX, currentSlotY, SLOT_SIZE, SLOT_SIZE)
+            love.graphics.setColor(colors.border)
+            love.graphics.setLineWidth(1)
+            ui.drawRoundedRectOutline(currentSlotX, currentSlotY, SLOT_SIZE, SLOT_SIZE, 4)
 
             -- Draw item if present
             local item = inv.items[slotIndex]
             if item then
-                -- Draw item icon (placeholder - simple colored rectangle for now)
-                love.graphics.setColor(item.color or {0.8, 0.8, 0.8, 1})
-                love.graphics.rectangle("fill", currentSlotX + 4, currentSlotY + 4, SLOT_SIZE - 8, SLOT_SIZE - 8)
+                -- Draw item icon
+                if item.icon then
+                    -- Draw the actual icon image
+                    love.graphics.setColor(1, 1, 1, 1)
+                    local iconScale = (SLOT_SIZE - 6) / 32  -- Scale to fit slot (32x32 icons)
+                    love.graphics.draw(item.icon, currentSlotX + 3, currentSlotY + 3, 0, iconScale, iconScale)
+                else
+                    -- Fallback: draw colored rectangle if no icon
+                    local itemColor = item.color or {0.8, 0.8, 0.8, 1}
+                    love.graphics.setColor(itemColor)
+                    ui.drawRoundedRect(currentSlotX + 3, currentSlotY + 3, SLOT_SIZE - 6, SLOT_SIZE - 6, 3)
+
+                    -- Add slight inner shadow for depth
+                    love.graphics.setColor(0, 0, 0, 0.3)
+                    ui.drawRoundedRect(currentSlotX + 5, currentSlotY + 5, SLOT_SIZE - 10, SLOT_SIZE - 10, 2)
+                end
 
                 -- Draw item count if stackable
                 if item.count and item.count > 1 then
-                    love.graphics.setColor(1, 1, 1, 1)
-                    love.graphics.print(tostring(item.count), currentSlotX + SLOT_SIZE - 15, currentSlotY + SLOT_SIZE - 15)
+                    love.graphics.setColor(colors.text)
+                    local countText = tostring(item.count)
+                    local countWidth = font:getWidth(countText)
+                    local countHeight = font:getHeight()
+                    love.graphics.print(countText, currentSlotX + SLOT_SIZE - countWidth - 2, currentSlotY + SLOT_SIZE - countHeight - 1)
                 end
             end
-
-            -- Store hovered slot for mouse interaction
-            if isHovered then
-                inv.hoveredSlot = slotIndex
-            end
         end
     end
 
-    -- Reset hovered slot if mouse not over any slot
+    -- Reset hover state if mouse not over any slot
     local mouseX, mouseY = love.mouse.getPosition()
-    local mouseOverInventory = mouseX >= inventoryX and mouseX <= inventoryX + inventoryWidth and
-                              mouseY >= inventoryY and mouseY <= inventoryY + inventoryHeight
+    local mouseOverInventory = false
+
+    -- Safety check for mouse position and inventory bounds
+    if mouseX and mouseY and inventoryX and inventoryY and inventoryWidth and inventoryHeight then
+        mouseOverInventory = mouseX >= inventoryX and mouseX <= inventoryX + inventoryWidth and
+                            mouseY >= inventoryY and mouseY <= inventoryY + inventoryHeight
+    end
 
     if not mouseOverInventory then
-        inv.hoveredSlot = nil
+        hoverState.slotIndex = nil
+        hoverState.time = 0
     end
-
-    -- Draw tooltip for hovered item
-    if inv.hoveredSlot and inv.items[inv.hoveredSlot] then
-        local item = inv.items[inv.hoveredSlot]
-        local tooltipX = mouseX + 15
-        local tooltipY = mouseY - 25
-
-        -- Tooltip background
-        love.graphics.setColor(0, 0, 0, 0.8)
-        local tooltipText = item.name or "Unknown Item"
-        local tooltipWidth = font:getWidth(tooltipText) + 10
-        local tooltipHeight = font:getHeight() + 8
-        love.graphics.rectangle("fill", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
-
-        -- Tooltip border
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.rectangle("line", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
-
-        -- Tooltip text
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.print(tooltipText, tooltipX + 5, tooltipY + 4)
-    end
-
-    -- Reset color
-    love.graphics.setColor(1, 1, 1, 1)
 end
 
--- Handle mouse click on inventory
-function inventory.handleClick(inv, x, y, button)
-    if not inv.visible or not inv.hoveredSlot then return end
+-- Update function for animations and hover timing
+function inventory.update(dt)
+    -- Update hover timer for tooltips
+    if hoverState.slotIndex then
+        hoverState.time = hoverState.time + dt
+    else
+        hoverState.time = 0
+    end
+end
+
+-- Enhanced mouse handling
+function inventory.onMousePressed(inv, x, y, button, mods)
+    if not inv.visible then return false end
+
+    local slotIndex = inventory.slotAt(inv, x, y)
+    if not slotIndex then return false end
+
+    local item = inv.items[slotIndex]
+    local ctrlPressed = mods and (mods.lctrl or mods.rctrl)
 
     if button == 1 then -- Left click
-        local item = inv.items[inv.hoveredSlot]
         if item then
-            print("Clicked on item: " .. (item.name or "Unknown"))
-            -- Handle item usage/consumption here
+            -- Start drag operation
+            inventory.startDrag(inv, slotIndex, x, y, ctrlPressed)
+            return true
         end
     elseif button == 2 then -- Right click
-        local item = inv.items[inv.hoveredSlot]
         if item then
-            print("Right-clicked on item: " .. (item.name or "Unknown"))
-            -- Handle item context menu here
+            -- Show context menu
+            inventory.showContextMenu(inv, slotIndex, x, y)
+            return true
         end
     end
+
+    return false
+end
+
+function inventory.onMouseReleased(inv, x, y, button)
+    if not inv.visible then return false end
+
+    if button == 1 and dragState.active then
+        -- Finish drag operation
+        inventory.finishDrag(inv, x, y)
+        return true
+    end
+
+    return false
+end
+
+function inventory.onMouseMoved(inv, x, y)
+    if not inv.visible then return false end
+
+    -- Update drag target if dragging
+    if dragState.active then
+        inventory.updateDragTarget(inv, x, y)
+        return true
+    end
+
+    return false
+end
+
+-- Draw drag ghost (item being dragged under cursor)
+function inventory.drawDragGhost()
+    if not dragState or not dragState.active or not dragState.item then return end
+
+    local mouseX, mouseY = love.mouse.getPosition()
+    if not mouseX or not mouseY or not dragState.offsetX or not dragState.offsetY then return end
+
+    local ghostX = mouseX - dragState.offsetX
+    local ghostY = mouseY - dragState.offsetY
+
+    -- Draw ghost item
+    if dragState.item.icon then
+        -- Draw the actual icon image with transparency
+        love.graphics.setColor(1, 1, 1, 0.7)
+        love.graphics.draw(dragState.item.icon, ghostX, ghostY, 0, SLOT_SIZE/32, SLOT_SIZE/32)
+    else
+        -- Fallback: draw colored rectangle if no icon
+        local itemColor = dragState.item.color or {0.8, 0.8, 0.8, 0.8}
+        love.graphics.setColor(itemColor[1], itemColor[2], itemColor[3], 0.7)
+        ui.drawRoundedRect(ghostX, ghostY, SLOT_SIZE, SLOT_SIZE, 4)
+    end
+
+    -- Draw quantity badge if splitting
+    if dragState.quantity and dragState.quantity ~= (dragState.item.count or 1) then
+        love.graphics.setColor(0, 0, 0, 0.8)
+        ui.drawRoundedRect(ghostX + SLOT_SIZE - 18, ghostY + SLOT_SIZE - 18, 16, 16, 2)
+
+        love.graphics.setColor(1, 1, 1, 1)
+        local quantityText = tostring(dragState.quantity)
+        local font = love.graphics.getFont()
+        local textWidth = font:getWidth(quantityText)
+        local textHeight = font:getHeight()
+        love.graphics.print(quantityText, ghostX + SLOT_SIZE - 9 - textWidth/2, ghostY + SLOT_SIZE - 9 - textHeight/2)
+    end
+end
+
+-- Draw tooltip for hovered item
+function inventory.drawTooltip(inv)
+    if not hoverState or not hoverState.slotIndex or hoverState.time < hoverState.tooltipDelay then return end
+
+    if not inv or not inv.items then return end
+
+    local item = inv.items[hoverState.slotIndex]
+    if not item then return end
+
+    local mouseX, mouseY = love.mouse.getPosition()
+    if not mouseX or not mouseY then return end
+    local tooltipX = mouseX + 15
+    local tooltipY = mouseY - 10
+
+    -- Build tooltip content
+    local lines = {}
+    table.insert(lines, item.name or "Unknown Item")
+
+    if item.description then
+        table.insert(lines, item.description)
+    end
+
+    if item.type then
+        table.insert(lines, "Type: " .. item.type)
+    end
+
+    if item.rarity then
+        table.insert(lines, "Rarity: " .. item.rarity)
+    end
+
+    -- Calculate tooltip dimensions
+    local font = love.graphics.getFont()
+    local maxWidth = 0
+    local totalHeight = 0
+    local lineHeight = font:getHeight() + 2
+
+    for _, line in ipairs(lines) do
+        local width = font:getWidth(line)
+        maxWidth = math.max(maxWidth, width)
+        totalHeight = totalHeight + lineHeight
+    end
+
+    local tooltipWidth = maxWidth + 16
+    local tooltipHeight = totalHeight + 8
+
+    -- Keep tooltip on screen
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+
+    if tooltipX + tooltipWidth > screenWidth then
+        tooltipX = mouseX - tooltipWidth - 15
+    end
+
+    if tooltipY + tooltipHeight > screenHeight then
+        tooltipY = mouseY - tooltipHeight - 10
+    end
+
+    if tooltipY < 0 then
+        tooltipY = mouseY + 20
+    end
+
+    -- Get UI theme colors
+    local colors = (ui and ui.uiState and ui.uiState.theme and ui.uiState.theme.colors) or {
+        panel = {0.12, 0.12, 0.18, 0.95},
+        border = {0.4, 0.3, 0.2, 1.0},
+        text = {0.9, 0.85, 0.8, 1.0}
+    }
+
+    -- Draw tooltip background
+    love.graphics.setColor(colors.panel)
+    ui.drawRoundedRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 6)
+
+    -- Draw tooltip border
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 6)
+    love.graphics.setLineWidth(1)
+
+    -- Draw tooltip text
+    love.graphics.setColor(colors.text)
+    local yOffset = tooltipY + 6
+    for _, line in ipairs(lines) do
+        love.graphics.print(line, tooltipX + 8, yOffset)
+        yOffset = yOffset + lineHeight
+    end
+end
+
+-- Show context menu for item
+function inventory.showContextMenu(inv, slotIndex, x, y)
+    local item = inv.items[slotIndex]
+    if not item then return end
+
+    -- Simple RuneScape-style context menu
+    local options = {}
+    
+    -- Use/Equip option (primary action at top)
+    if item.onUse then
+        table.insert(options, {
+            text = "Use",
+            action = function()
+                if item.onUse then
+                    item.onUse(inv, slotIndex)
+                    gameState.contextMenu = nil
+                end
+            end,
+            enabled = true
+        })
+    elseif item.onEquip then
+        table.insert(options, {
+            text = "Equip",
+            action = function()
+                if item.onEquip then
+                    item.onEquip(inv, slotIndex)
+                    gameState.contextMenu = nil
+                end
+            end,
+            enabled = true
+        })
+    end
+    
+    -- Drop option
+    table.insert(options, {
+        text = "Drop",
+        action = function()
+            inventory.dropItem(inv, slotIndex)
+            gameState.contextMenu = nil
+        end,
+        enabled = true
+    })
+    
+    -- Cancel option
+    table.insert(options, {
+        text = "Cancel",
+        action = function()
+            gameState.contextMenu = nil
+        end,
+        enabled = true
+    })
+    
+    -- Store context menu in game state for rendering
+    gameState.contextMenu = {
+        x = x,
+        y = y,
+        options = options,
+        slotIndex = slotIndex
+    }
+end
+
+-- Drop item dialog for "Drop X" option
+function inventory.dropItemDialog(inv, slotIndex)
+    local item = inv.items[slotIndex]
+    if not item then return end
+    
+    -- For now, drop half the stack (could be enhanced with text input dialog)
+    local dropAmount = math.ceil((item.count or 1) / 2)
+    inventory.dropItem(inv, slotIndex, dropAmount)
+    ui.addChatMessage("Dropped " .. dropAmount .. " " .. (item.name or "items"), {0.8, 0.6, 0.4})
+end
+
+-- Start "Use with" interaction
+function inventory.startUseWith(inv, slotIndex)
+    local item = inv.items[slotIndex]
+    if not item then return end
+    
+    -- Set cursor to use-with mode (for future implementation)
+    ui.addChatMessage("Use " .. (item.name or "item") .. " with...", {0.6, 0.8, 1})
+    -- Could add special cursor or highlight mode here
+end
+
+-- Enhanced drop item function with quantity support
+function inventory.dropItem(inv, slotIndex, quantity)
+    local item = inv.items[slotIndex]
+    if not item then return false end
+    
+    local dropAmount = quantity or item.count or 1
+    if dropAmount >= (item.count or 1) then
+        -- Drop entire stack
+        inv.items[slotIndex] = nil
+        ui.addChatMessage("Dropped " .. (item.name or "item"), {0.8, 0.6, 0.4})
+    else
+        -- Drop partial stack
+        item.count = item.count - dropAmount
+        ui.addChatMessage("Dropped " .. dropAmount .. " " .. (item.name or "items"), {0.8, 0.6, 0.4})
+    end
+    return true
+end
+
+-- Split stack function
+function inventory.splitStack(inv, slotIndex)
+    local item = inv.items[slotIndex]
+    if not item or not item.stackable or not item.count or item.count <= 1 then
+        return false, "Cannot split this item"
+    end
+
+    -- Find empty slot for split
+    local emptySlot = nil
+    for i = 1, TOTAL_SLOTS do
+        if not inv.items[i] then
+            emptySlot = i
+            break
+        end
+    end
+
+    if not emptySlot then
+        return false, "No empty slot available"
+    end
+
+    -- Split the stack
+    local splitAmount = math.ceil(item.count / 2)
+    local remainingAmount = item.count - splitAmount
+
+    -- Create new item for split
+    local newItem = {}
+    for k, v in pairs(item) do
+        newItem[k] = v
+    end
+    newItem.count = splitAmount
+
+    -- Update original item
+    if remainingAmount > 0 then
+        item.count = remainingAmount
+    else
+        inv.items[slotIndex] = nil
+    end
+
+    -- Place split in empty slot
+    inv.items[emptySlot] = newItem
+
+    ui.addChatMessage("Split stack: " .. (item.name or "Unknown") .. " (" .. splitAmount .. ")", {0.8, 0.8, 1})
+    return true
+end
+
+-- Drop item function
+function inventory.dropItem(inv, slotIndex)
+    local item = inv.items[slotIndex]
+    if not item then return false end
+
+    -- Add to world ground items (would need world integration)
+    ui.addChatMessage("Dropped: " .. (item.name or "Unknown Item"), {1, 0.8, 0.5})
+
+    -- Remove from inventory
+    inv.items[slotIndex] = nil
+    return true
+end
+
+-- Destroy item function (with confirmation)
+function inventory.destroyItem(inv, slotIndex)
+    local item = inv.items[slotIndex]
+    if not item then return false end
+
+    -- Show confirmation dialog
+    ui.showConfirmDialog(
+        "Destroy Item",
+        "Are you sure you want to destroy '" .. (item.name or "Unknown Item") .. "'? This action cannot be undone.",
+        function()
+            -- Confirmed - destroy the item
+            ui.addChatMessage("Destroyed: " .. (item.name or "Unknown Item"), {1, 0.5, 0.5})
+            inv.items[slotIndex] = nil
+        end,
+        function()
+            -- Cancelled - do nothing
+            ui.addChatMessage("Destroy cancelled", {0.8, 0.8, 1})
+        end
+    )
+    return true
+end
+
+-- Handle keyboard shortcuts for inventory
+function inventory.handleKeyPress(inv, key, gameState)
+    if not inv.visible then return false end
+
+    -- Get current hovered slot
+    local slotIndex = hoverState.slotIndex
+    if not slotIndex then return false end
+
+    local item = inv.items[slotIndex]
+    if not item then return false end
+
+    if key == "e" then
+        -- Use/Equip item
+        if item.onUse then
+            item.onUse(gameState.player, item)
+            return true
+        elseif item.onEquip then
+            item.onEquip(gameState.player, slotIndex)
+            return true
+        end
+    elseif key == "r" then
+        -- Split stack
+        if item.stackable and item.count and item.count > 1 then
+            inventory.splitStack(inv, slotIndex)
+            return true
+        end
+    elseif key == "delete" then
+        -- Destroy item
+        inventory.destroyItem(inv, slotIndex)
+        return true
+    end
+
+    return false
+end
+
+-- Legacy mouse handling (for backward compatibility)
+function inventory.handleClick(inv, x, y, button)
+    if not inv.visible then return end
+
+    local mods = {
+        lctrl = love.keyboard.isDown("lctrl"),
+        rctrl = love.keyboard.isDown("rctrl"),
+        lshift = love.keyboard.isDown("lshift"),
+        rshift = love.keyboard.isDown("rshift")
+    }
+
+    inventory.onMousePressed(inv, x, y, button, mods)
 end
 
 -- Get inventory dimensions for positioning other UI elements
@@ -229,5 +1418,38 @@ function inventory.getDimensions()
 
     return inventoryWidth, inventoryHeight
 end
+
+-- Check if mouse is over any visible inventory panel
+function inventory.isMouseOverInventory(mouseX, mouseY)
+    -- Check all registered panels
+    for panelId, panel in pairs(panelSystem.panels) do
+        if panel and panel.visible then
+            local panelX = panel.x or 0
+            local panelY = panel.y or 0
+            local panelWidth, panelHeight
+            
+            if panel.cols and panel.rows and panel.slotSize then
+                local padding = panel.slotPadding or 5
+                panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
+                panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
+            else
+                panelWidth = 300
+                panelHeight = 200
+            end
+            
+            if mouseX >= panelX and mouseX <= panelX + panelWidth and 
+               mouseY >= panelY and mouseY <= panelY + panelHeight then
+                return true, panelId, panel
+            end
+        end
+    end
+    return false
+end
+
+-- Export panel system and classes for external use
+inventory.BasePanel = BasePanel
+inventory.EquipmentPanel = EquipmentPanel
+inventory.HotbarPanel = HotbarPanel
+inventory.panelSystem = panelSystem
 
 return inventory

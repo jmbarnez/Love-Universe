@@ -382,6 +382,94 @@ function ui.drawInventorySlot(x, y, w, h, item, index, selected)
     end
 end
 
+-- Create a confirmation modal
+function ui.showConfirmDialog(title, message, onConfirm, onCancel)
+    uiState.confirmDialog = {
+        title = title,
+        message = message,
+        onConfirm = onConfirm or function() end,
+        onCancel = onCancel or function() end,
+        visible = true
+    }
+end
+
+function ui.drawConfirmDialog()
+    local dialog = uiState.confirmDialog
+    if not dialog or not dialog.visible then return end
+
+    local colors = uiState.theme.colors
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+
+    -- Dialog dimensions
+    local dialogWidth = 300 * constants.UI_SCALE
+    local dialogHeight = 120 * constants.UI_SCALE
+    local dialogX = (screenWidth - dialogWidth) / 2
+    local dialogY = (screenHeight - dialogHeight) / 2
+
+    -- Draw dialog background
+    love.graphics.setColor(colors.background)
+    ui.drawRoundedRect(dialogX, dialogY, dialogWidth, dialogHeight, 8)
+
+    -- Draw dialog border
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(dialogX, dialogY, dialogWidth, dialogHeight, 8)
+    love.graphics.setLineWidth(1)
+
+    -- Draw title
+    love.graphics.setColor(colors.text)
+    local titleWidth = love.graphics.getFont():getWidth(dialog.title)
+    love.graphics.print(dialog.title, dialogX + (dialogWidth - titleWidth) / 2, dialogY + 10)
+
+    -- Draw message
+    love.graphics.setColor(colors.text)
+    local messageY = dialogY + 35
+    local messageLines = {}
+    local lineWidth = dialogWidth - 20
+    local words = {}
+    for word in dialog.message:gmatch("%S+") do
+        table.insert(words, word)
+    end
+
+    local currentLine = ""
+    for _, word in ipairs(words) do
+        local testLine = currentLine .. (currentLine == "" and "" or " ") .. word
+        if love.graphics.getFont():getWidth(testLine) > lineWidth then
+            table.insert(messageLines, currentLine)
+            currentLine = word
+        else
+            currentLine = testLine
+        end
+    end
+    if currentLine ~= "" then
+        table.insert(messageLines, currentLine)
+    end
+
+    for i, line in ipairs(messageLines) do
+        love.graphics.print(line, dialogX + 10, messageY + (i-1) * 16)
+    end
+
+    -- Draw buttons
+    local buttonY = dialogY + dialogHeight - 35
+    local buttonWidth = 80
+    local buttonHeight = 25
+    local confirmX = dialogX + dialogWidth - buttonWidth - 10
+    local cancelX = dialogX + 10
+
+    suit.layout:reset(cancelX, buttonY, buttonWidth, buttonHeight)
+    if suit.Button("Cancel", {id = "confirm_cancel"}, cancelX, buttonY, buttonWidth, buttonHeight).hit then
+        dialog.onCancel()
+        dialog.visible = false
+    end
+
+    suit.layout:reset(confirmX, buttonY, buttonWidth, buttonHeight)
+    if suit.Button("Confirm", {id = "confirm_ok"}, confirmX, buttonY, buttonWidth, buttonHeight).hit then
+        dialog.onConfirm()
+        dialog.visible = false
+    end
+end
+
 -- Create a settings panel
 function ui.createSettingsPanel()
     local settings_content = function(window, w, h)
@@ -511,24 +599,44 @@ end
 -- Draw all UI elements
 function ui.draw()
     love.graphics.push("all")
-    
+
     -- Draw windows
     for _, window in pairs(uiState.windows) do
         ui.drawWindow(window)
     end
-    
+
     -- Draw chat window
     ui.drawChatWindow()
-    
+
+    -- Draw confirmation dialog (on top of other UI)
+    ui.drawConfirmDialog()
+
     -- Draw tooltip last (on top)
     ui.drawTooltip()
-    
+
     love.graphics.pop()
 end
 
 -- Event handling
 function ui.mousepressed(x, y, button)
+    -- Let SUIT handle the click first
     suit.mousepressed(x, y, button)
+    
+    -- Check if the click was over any UI element
+    -- For now, we'll check if the chat window is visible and was clicked
+    if uiState.chatWindow.visible then
+        local chatX = uiState.chatWindow.x
+        local chatY = uiState.chatWindow.y
+        local chatW = uiState.chatWindow.width
+        local chatH = uiState.chatWindow.height
+
+        if x >= chatX and x <= chatX + chatW and
+           y >= chatY and y <= chatY + chatH then
+            return true -- UI consumed the click
+        end
+    end
+    
+    return false -- UI did not consume the click
 end
 
 function ui.mousereleased(x, y, button)
