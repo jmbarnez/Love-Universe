@@ -1,0 +1,51 @@
+# Love2D Executables and Libraries
+love.exe
+lovec.exe
+love.dll
+lua51.dll
+msvcp120.dll
+msvcr120.dll
+OpenAL32.dll
+SDL2.dll
+mpg123.dll
+
+# Third-party libraries
+lib/
+
+# Game-specific ignore patterns
+# Uncomment and modify as needed for your project
+
+# OS-specific files
+*.DS_Store
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build outputs
+dist/
+build/
+
+# Save files and game data
+*.sav
+*.dat
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Love2D project files
+*.love
+*.zip
+
+# Documentation
+*.pdf
+*.doc
+*.docx
