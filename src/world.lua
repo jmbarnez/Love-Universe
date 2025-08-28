@@ -1,0 +1,428 @@
+-- World module for Love2D RPG
+-- Handles world generation, biomes, collision detection, and world objects
+
+local world = {}
+local constants = require("src.constants")
+local chicken = require("src.enemies.chicken")
+
+-- Generate height map (pixel-based)
+function world.generateHeightMap()
+    local heightMap = {}
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    for x = 1, tilesX do
+        heightMap[x] = {}
+        for y = 1, tilesY do
+            -- Use multiple octaves for more natural terrain
+            local height = 0
+            local amplitude = 1
+            local frequency = constants.HEIGHT_MAP_SCALE
+
+            -- Add multiple octaves for detail
+            for octave = 1, constants.HEIGHT_OCTAVES do
+                height = height + love.math.noise(x * frequency, y * frequency) * amplitude
+                amplitude = amplitude * 0.5
+                frequency = frequency * 2
+            end
+
+            -- Normalize height to 0-1 range
+            heightMap[x][y] = (height + 1) / 2
+        end
+    end
+
+    return heightMap
+end
+
+-- Generate temperature map (north-south gradient with noise)
+function world.generateTemperatureMap()
+    local tempMap = {}
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    for x = 1, tilesX do
+        tempMap[x] = {}
+        for y = 1, tilesY do
+            -- Temperature decreases as we go north (lower y values)
+            local baseTemp = 1.0 - (y / tilesY) * constants.TEMPERATURE_BASE_GRADIENT
+            local noise = love.math.noise(x * constants.TEMPERATURE_NOISE_SCALE, y * constants.TEMPERATURE_NOISE_SCALE) * constants.TEMPERATURE_NOISE_AMPLITUDE
+            -- Add some extra variation for more interesting biome distribution
+            local extraVariation = love.math.noise(x * constants.BIOME_VARIATION_SCALE, y * constants.BIOME_VARIATION_SCALE) * 0.1
+            tempMap[x][y] = math.max(0, math.min(1, baseTemp + noise + extraVariation))
+        end
+    end
+
+    return tempMap
+end
+
+-- Generate humidity map
+function world.generateHumidityMap()
+    local humidityMap = {}
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    for x = 1, tilesX do
+        humidityMap[x] = {}
+        for y = 1, tilesY do
+            local baseHumidity = love.math.noise(x * constants.HUMIDITY_NOISE_SCALE, y * constants.HUMIDITY_NOISE_SCALE)
+            -- Add some extra variation for more interesting biome distribution
+            local extraVariation = love.math.noise(x * constants.BIOME_VARIATION_SCALE + 100, y * constants.BIOME_VARIATION_SCALE + 100) * 0.15
+            humidityMap[x][y] = math.max(0, math.min(1, baseHumidity + extraVariation))
+        end
+    end
+
+    return humidityMap
+end
+
+-- Determine biome based on height, temperature, and humidity
+function world.getBiome(height, temperature, humidity, x, y)
+    -- Ocean and deep ocean (lowest elevations)
+    if height < constants.DEEP_OCEAN_THRESHOLD then
+        return {type = "deep_ocean", color = {0.05, 0.15, 0.4}, walkable = false}
+    elseif height < constants.OCEAN_THRESHOLD then
+        -- Add some coastal water variation
+        local coastalNoise = love.math.noise(x * 0.1, y * 0.1)
+        if coastalNoise < constants.COASTAL_WATER_CHANCE then
+            return {type = "ocean", color = {0.05, 0.25, 0.7}, walkable = false}
+        else
+            return {type = "ocean", color = {0.1, 0.3, 0.8}, walkable = false}
+        end
+    end
+
+    -- Beach (coastal areas just above water)
+    if height < constants.BEACH_THRESHOLD then
+        return {type = "beach", color = {0.95, 0.9, 0.7}, walkable = true}
+    end
+
+    -- Desert (hot, dry areas)
+    if temperature > constants.HOT_TEMPERATURE_THRESHOLD and humidity < constants.DRY_HUMIDITY_THRESHOLD then
+        return {type = "desert", color = {0.9, 0.8, 0.6}, walkable = true}
+    end
+
+    -- Grassland (moderate conditions)
+    if temperature > 0.4 and temperature < 0.9 and humidity > constants.DRY_HUMIDITY_THRESHOLD then
+        if height > constants.MODERATE_HEIGHT_THRESHOLD then
+            return {type = "hills", color = {0.3, 0.5, 0.2}, walkable = true}
+        else
+            return {type = "grassland", color = {0.25, 0.6, 0.2}, walkable = true}
+        end
+    end
+
+    -- Forest in temperate, humid areas
+    if temperature > constants.COLD_TEMPERATURE_THRESHOLD and temperature < constants.HOT_TEMPERATURE_THRESHOLD and humidity > constants.WET_HUMIDITY_THRESHOLD then
+        if height > constants.HIGH_HEIGHT_THRESHOLD then
+            return {type = "dark_forest", color = {0.1, 0.25, 0.1}, walkable = true}
+        else
+            return {type = "forest", color = {0.15, 0.4, 0.15}, walkable = true}
+        end
+    end
+
+    -- Mountains at high elevations
+    if height > constants.MOUNTAIN_HEIGHT_THRESHOLD then
+        if temperature < constants.COLD_TEMPERATURE_THRESHOLD then
+            return {type = "snow_mountain", color = {0.9, 0.9, 0.95}, walkable = true}
+        else
+            return {type = "mountain", color = {0.4, 0.4, 0.4}, walkable = true}
+        end
+    end
+
+    -- Tundra in cold areas
+    if temperature < constants.COLD_TEMPERATURE_THRESHOLD then
+        return {type = "tundra", color = {0.6, 0.7, 0.5}, walkable = true}
+    end
+
+    -- Default to grassland
+    return {type = "grassland", color = {0.25, 0.6, 0.2}, walkable = true}
+end
+
+-- Generate scattered objects (only chickens) - pixel-based
+function world.generateObjects(gameWorld)
+    local objects = {}
+    local chickens = {}
+
+    -- Initialize empty objects and chickens tables (still use tile grid for storage)
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    for x = 1, tilesX do
+        objects[x] = {}
+        chickens[x] = {}
+        for y = 1, tilesY do
+            objects[x][y] = nil
+            chickens[x][y] = nil
+        end
+    end
+
+    -- Spawn chickens in grasslands and hills at pixel coordinates (max 3 total)
+    local grasslandCount = 0
+    local hillsCount = 0
+    local chickensSpawned = 0
+
+    for x = 1, tilesX do
+        for y = 1, tilesY do
+            local tile = gameWorld[x][y]
+            if tile.type == "grassland" then grasslandCount = grasslandCount + 1 end
+            if tile.type == "hills" then hillsCount = hillsCount + 1 end
+
+            local spawnChance = love.math.random()
+
+            if (tile.type == "grassland" or tile.type == "hills") and spawnChance < constants.CHICKEN_SPAWN_RATE and chickensSpawned < 3 then
+                -- Spawn chicken at random pixel coordinates within this tile
+                local tileLeft = (x - 1) * constants.TILE_SIZE
+                local tileTop = (y - 1) * constants.TILE_SIZE
+                local pixelX = tileLeft + love.math.random(0, constants.TILE_SIZE - 1)
+                local pixelY = tileTop + love.math.random(0, constants.TILE_SIZE - 1)
+                chickens[x][y] = chicken.create(pixelX, pixelY)
+                chickensSpawned = chickensSpawned + 1
+            end
+        end
+    end
+
+    -- DEBUG: Print biome and chicken spawn info
+    -- print("=== WORLD GENERATION DEBUG ===")
+    -- print("World tiles: " .. tilesX .. "x" .. tilesY .. " = " .. (tilesX * tilesY) .. " total tiles")
+    -- print("Grassland tiles: " .. grasslandCount)
+    -- print("Hills tiles: " .. hillsCount)
+
+    -- Ensure at least some chickens spawn near the center (fallback, but respect max 3 limit)
+    if chickensSpawned < 3 then
+        local centerTileX = math.floor(tilesX / 2)
+        local centerTileY = math.floor(tilesY / 2)
+
+        -- Always ensure some chickens spawn near the center for gameplay (but don't exceed 3 total)
+        local guaranteedChickens = 0
+        for x = math.max(1, centerTileX - 8), math.min(tilesX, centerTileX + 8) do
+            for y = math.max(1, centerTileY - 8), math.min(tilesY, centerTileY + 8) do
+                local tile = gameWorld[x][y]
+                if chickens[x][y] == nil and (tile.type == "grassland" or tile.type == "hills") and love.math.random() < 0.4 and chickensSpawned < 3 then
+                    local tileLeft = (x - 1) * constants.TILE_SIZE
+                    local tileTop = (y - 1) * constants.TILE_SIZE
+                    local pixelX = tileLeft + love.math.random(0, constants.TILE_SIZE - 1)
+                    local pixelY = tileTop + love.math.random(0, constants.TILE_SIZE - 1)
+                    chickens[x][y] = chicken.create(pixelX, pixelY)
+                    guaranteedChickens = guaranteedChickens + 1
+                    chickensSpawned = chickensSpawned + 1
+                end
+            end
+        end
+    end
+
+    return objects, chickens
+end
+
+-- Generate procedural world with realistic biomes
+function world.generate()
+    -- Set a random seed for unique world generation each time
+    local worldSeed = love.math.random(1, 1000000)
+    love.math.setRandomSeed(worldSeed)
+
+    -- Generate environmental maps
+    local heightMap = world.generateHeightMap()
+    local tempMap = world.generateTemperatureMap()
+    local humidityMap = world.generateHumidityMap()
+
+    -- Generate world based on environmental factors
+    local gameWorld = {}
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    for x = 1, tilesX do
+        gameWorld[x] = {}
+        for y = 1, tilesY do
+            local height = heightMap[x][y]
+            local temperature = tempMap[x][y]
+            local humidity = humidityMap[x][y]
+
+            gameWorld[x][y] = world.getBiome(height, temperature, humidity, x, y)
+        end
+    end
+
+    -- Generate scattered objects and chickens
+    local objects, chickens = world.generateObjects(gameWorld)
+
+    return gameWorld, objects, chickens
+end
+
+-- Convert screen coordinates to world coordinates (pixel-based)
+function world.screenToWorld(screenX, screenY, camera)
+    local worldX = screenX + camera.x
+    local worldY = screenY + camera.y
+    return worldX, worldY
+end
+
+-- Convert world coordinates to screen coordinates (pixel-based)
+function world.worldToScreen(worldX, worldY, camera)
+    local screenX = worldX - camera.x
+    local screenY = worldY - camera.y
+    return screenX, screenY
+end
+
+-- Check if coordinates are within world bounds (pixel-based)
+function world.isInWorld(x, y)
+    return x >= 0 and x <= constants.WORLD_WIDTH and y >= 0 and y <= constants.WORLD_HEIGHT
+end
+
+-- Check if a position is walkable (pixel-based)
+function world.isWalkable(x, y, gameWorld)
+    -- Convert pixel coordinates to tile coordinates for lookup
+    local tileX = math.floor(x / constants.TILE_SIZE) + 1
+    local tileY = math.floor(y / constants.TILE_SIZE) + 1
+
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    if tileX < 1 or tileX > tilesX or tileY < 1 or tileY > tilesY then
+        return false
+    end
+
+    local tile = gameWorld[tileX] and gameWorld[tileX][tileY]
+    return tile and tile.walkable
+end
+
+-- Find the nearest safe spawn location (pixel-based)
+function world.findSafeSpawn(gameWorld)
+    local centerX, centerY = constants.WORLD_WIDTH / 2, constants.WORLD_HEIGHT / 2
+
+    -- First check the center
+    if world.isWalkable(centerX, centerY, gameWorld) then
+        return centerX, centerY
+    end
+
+    -- Spiral outward from center to find nearest walkable position
+    local maxSearchRadius = 300 -- pixels to search
+    local step = 16 -- step size in pixels (half tile)
+
+    for radius = step, maxSearchRadius, step do
+        -- Check perimeter of circle
+        local circumference = 2 * math.pi * radius
+        local numChecks = math.max(8, math.floor(circumference / step))
+
+        for i = 1, numChecks do
+            local angle = (i / numChecks) * 2 * math.pi
+            local checkX = centerX + math.cos(angle) * radius
+            local checkY = centerY + math.sin(angle) * radius
+
+            if world.isInWorld(checkX, checkY) and world.isWalkable(checkX, checkY, gameWorld) then
+                return checkX, checkY
+            end
+        end
+    end
+
+    -- Ultimate fallback - center of world (even if not walkable)
+    return centerX, centerY
+end
+
+-- Draw world tiles
+function world.drawTiles(gameWorld, camera, GAME_WIDTH, GAME_HEIGHT)
+    -- Calculate visible area in tile coordinates with buffer for smooth scrolling
+    local startTileX = math.max(1, math.floor(camera.x / constants.TILE_SIZE))
+    local startTileY = math.max(1, math.floor(camera.y / constants.TILE_SIZE))
+    local endTileX = math.min(#gameWorld, startTileX + math.ceil(GAME_WIDTH / constants.TILE_SIZE) + 2)
+    local endTileY = math.min(#gameWorld[1] or 0, startTileY + math.ceil(GAME_HEIGHT / constants.TILE_SIZE) + 2)
+
+    -- Draw tiles
+    for x = startTileX, endTileX do
+        for y = startTileY, endTileY do
+            if gameWorld[x] and gameWorld[x][y] then
+                local tile = gameWorld[x][y]
+
+                -- Calculate pixel position
+                local pixelX = (x - 1) * constants.TILE_SIZE
+                local pixelY = (y - 1) * constants.TILE_SIZE
+
+                -- Slightly blend tile colors to reduce grid appearance
+                local blendColor = {
+                    tile.color[1] * constants.TILE_COLOR_BLEND_FACTOR,
+                    tile.color[2] * constants.TILE_COLOR_BLEND_FACTOR,
+                    tile.color[3] * constants.TILE_COLOR_BLEND_FACTOR,
+                    1.0
+                }
+
+                love.graphics.setColor(blendColor)
+                love.graphics.rectangle("fill", pixelX, pixelY, constants.TILE_SIZE, constants.TILE_SIZE)
+
+                -- Add subtle shading to water tiles
+                if tile.type == "water" then
+                    love.graphics.setColor(tile.color[1] * constants.WATER_SHADING_FACTOR, tile.color[2] * constants.WATER_SHADING_FACTOR, tile.color[3] * constants.WATER_SHADING_FACTOR, constants.WATER_TRANSPARENCY)
+                    love.graphics.rectangle("fill", pixelX, pixelY, constants.TILE_SIZE, constants.TILE_SIZE)
+                end
+            end
+        end
+    end
+end
+
+-- Draw world objects
+function world.drawObjects(objects, camera, GAME_WIDTH, GAME_HEIGHT)
+    -- Calculate visible area in tile coordinates with buffer for smooth scrolling
+    local startTileX = math.max(1, math.floor(camera.x / constants.TILE_SIZE))
+    local startTileY = math.max(1, math.floor(camera.y / constants.TILE_SIZE))
+    local endTileX = math.min(#objects, startTileX + math.ceil(GAME_WIDTH / constants.TILE_SIZE) + 2)
+    local endTileY = math.min(#objects[1] or 0, startTileY + math.ceil(GAME_HEIGHT / constants.TILE_SIZE) + 2)
+
+    -- Draw objects (trees, rocks, flowers)
+    for x = startTileX, endTileX do
+        for y = startTileY, endTileY do
+            if objects[x] and objects[x][y] then
+                local obj = objects[x][y]
+                local pixelX = (x - 1) * constants.TILE_SIZE
+                local pixelY = (y - 1) * constants.TILE_SIZE
+
+                love.graphics.setColor(obj.color)
+
+                if obj.type == "tree" then
+                    love.graphics.circle("fill", pixelX + constants.TILE_SIZE/2, pixelY + constants.TILE_SIZE/2, obj.size/2)
+                elseif obj.type == "rock" then
+                    love.graphics.rectangle("fill", pixelX, pixelY, obj.size, obj.size)
+                elseif obj.type == "flower" then
+                    love.graphics.circle("fill", pixelX + constants.TILE_SIZE/2, pixelY + constants.TILE_SIZE/2, obj.size/2)
+                elseif obj.type == "cactus" then
+                    -- Draw cactus as a vertical rectangle with arms
+                    love.graphics.rectangle("fill", pixelX + obj.size/4, pixelY, obj.size/2, obj.size)
+                    -- Add arms
+                    love.graphics.rectangle("fill", pixelX, pixelY + obj.size/3, obj.size/4, obj.size/4)
+                    love.graphics.rectangle("fill", pixelX + obj.size * 0.75, pixelY + obj.size/2, obj.size/4, obj.size/4)
+                elseif obj.type == "palm" then
+                    -- Draw palm tree: trunk + leaves
+                    love.graphics.rectangle("fill", pixelX + obj.size/2 - 1, pixelY + obj.size/2, 2, obj.size/2)
+                    -- Palm leaves
+                    love.graphics.circle("fill", pixelX + obj.size/2, pixelY + obj.size/4, obj.size/3)
+                end
+            end
+        end
+    end
+end
+
+-- Draw chickens
+function world.drawChickens(chickens, camera, GAME_WIDTH, GAME_HEIGHT, playerX, playerY)
+    -- Find closest interactable chicken for outline
+    local closestChicken = nil
+    local closestDistance = math.huge
+    local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
+    local tilesY = math.ceil(constants.WORLD_HEIGHT / constants.TILE_SIZE)
+
+    -- First pass: find closest chicken within interaction range
+    for x = 1, tilesX do
+        for y = 1, tilesY do
+            if chickens[x] and chickens[x][y] and chickens[x][y].alive then
+                local chick = chickens[x][y]
+                local distance = math.sqrt((chick.worldX - playerX)^2 + (chick.worldY - playerY)^2)
+                if distance <= 75 and distance < closestDistance then -- 75 is INTERACTION_DISTANCE
+                    closestDistance = distance
+                    closestChicken = chick
+                end
+            end
+        end
+    end
+
+    -- Second pass: draw all chickens, highlight the closest one
+    for x = 1, tilesX do
+        for y = 1, tilesY do
+            if chickens[x] and chickens[x][y] then
+                local isInteractable = (chickens[x][y] == closestChicken)
+                chicken.draw(chickens[x][y], camera, isInteractable)
+            end
+        end
+    end
+end
+
+return world
