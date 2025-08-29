@@ -479,7 +479,8 @@ function HotbarPanel:draw()
         
         -- Draw selection highlight if this slot is selected
         local game = require("src.game")
-        if game and game.gameState and game.gameState.player and game.gameState.player.selectedHotbarSlot == i then
+        local gs = game.getState and game.getState() or nil
+        if gs and gs.player and gs.player.selectedHotbarSlot == i then
             love.graphics.setColor(1, 1, 0, 0.8)  -- Yellow highlight
             love.graphics.setLineWidth(3)
             ui.drawRoundedRectOutline(slotX - 1, slotY - 1, slotW + 2, slotH + 2, 4)
@@ -873,10 +874,17 @@ end
 function inventory.updateDragTarget(mouseX, mouseY)
     if not dragState.active then return end
 
-    -- Check if mouse is over any inventory panel
-    local isOverAnyPanel = false
+    -- Reset drag state
+    dragState.valid = false
+    dragState.targetPanel = nil
+    dragState.targetIndex = nil
+    dragState.overPanel = false
 
-    -- Check all registered panels for target
+    -- Check if mouse is over any inventory panel first
+    local isOverAnyPanel = inventory.isMouseOverInventory(mouseX, mouseY)
+    dragState.overPanel = isOverAnyPanel
+
+    -- Check all registered panels for valid drop targets
     for panelId, panel in pairs(panelSystem.panels) do
         if panel.visible then
             local targetIndex
@@ -909,22 +917,9 @@ function inventory.updateDragTarget(mouseX, mouseY)
                 dragState.targetIndex = targetIndex
                 dragState.overPanel = true
                 return
-            else
-                -- Mouse is over this panel but not on a specific slot
-                -- Check if mouse is within panel bounds by checking if any panel contains the mouse
-                local isOverPanel = inventory.isMouseOverInventory(mouseX, mouseY)
-                if isOverPanel then
-                    isOverAnyPanel = true
-                end
             end
         end
     end
-
-    -- No valid target found
-    dragState.valid = false
-    dragState.targetPanel = nil
-    dragState.targetIndex = nil
-    dragState.overPanel = isOverAnyPanel
 end
 
 -- Finish drag operation (enhanced for multi-panel)
@@ -955,53 +950,11 @@ function inventory.finishDrag(mouseX, mouseY)
         -- Mouse is over a panel but not on a valid slot - cancel drag, don't drop item
         ui.addChatMessage("Drag cancelled - item returned to original position", {0.8, 0.8, 1})
     else
-        -- Mouse is not over any panel - drop the item to the world
+        -- Mouse is not over any panel - drop the item at player's feet
         local fromPanel = panelSystem.getPanel(dragState.fromPanel)
-        if fromPanel and dragState.fromIndex and dragState.item then
-            -- Get player position for dropping items
-            local playerX, playerY = 0, 0
-            if gameState and gameState.player then
-                playerX = gameState.player.x
-                playerY = gameState.player.y
-            end
-
-            -- Drop the item
-            if dragState.quantity and dragState.quantity < (dragState.item.count or 1) then
-                -- Dropping partial stack - create new item for ground
-                local droppedItem = {
-                    name = dragState.item.name,
-                    count = dragState.quantity,
-                    type = dragState.item.type,
-                    stackable = dragState.item.stackable,
-                    stackMax = dragState.item.stackMax,
-                    color = dragState.item.color,
-                    icon = dragState.item.icon,
-                    description = dragState.item.description,
-                    rarity = dragState.item.rarity
-                }
-
-                -- Reduce source stack
-                dragState.item.count = dragState.item.count - dragState.quantity
-
-                -- Add to world ground items
-                if world and world.addGroundItem then
-                    world.addGroundItem(droppedItem, playerX + love.math.random(-20, 20), playerY + love.math.random(-20, 20))
-                end
-
-                ui.addChatMessage("Dropped " .. dragState.quantity .. " " .. (dragState.item.name or "items"), {0.8, 0.6, 0.4})
-            else
-                -- Drop entire item
-                local droppedItem = dragState.item
-
-                -- Add to world ground items
-                if world and world.addGroundItem then
-                    world.addGroundItem(droppedItem, playerX + love.math.random(-20, 20), playerY + love.math.random(-20, 20))
-                end
-
-                -- Remove from inventory
-                fromPanel.items[dragState.fromIndex] = nil
-                ui.addChatMessage("Dropped " .. (dragState.item.name or "item"), {0.8, 0.6, 0.4})
-            end
+        if fromPanel and dragState.fromIndex then
+            -- Use the helper function to drop at player's feet
+            inventory.dropItemAtPlayer(fromPanel, dragState.fromIndex, { count = dragState.quantity })
         end
     end
 
@@ -1515,6 +1468,139 @@ function inventory.handleKeyPress(inv, key, gameState)
     return false
 end
 
+-- Show context menu for inventory slot
+function inventory.showContextMenu(inv, slotIndex, x, y)
+    local item = inv.items[slotIndex]
+    if not item then return end
+
+    local context_menu = require("src.context_menu")
+    local options = {}
+
+    -- Use item option
+    if item.onUse then
+        table.insert(options, {
+            text = "Use",
+            action = function()
+                local game = _G.game or require("game")
+                local gs = game.getState()
+                if gs and gs.player then
+                    item.onUse(gs.player, item)
+                end
+            end
+        })
+    end
+
+    -- Equip item option (for equipment)
+    if item.type and (item.type == "weapon" or item.type == "armor" or item.type == "shield" or item.type == "helmet" or item.type == "boots") then
+        table.insert(options, {
+            text = "Equip",
+            action = function()
+                local game = _G.game or require("game")
+                local gs = game.getState()
+                if gs and gs.player and item.onEquip then
+                    item.onEquip(gs.player, slotIndex)
+                    ui.addChatMessage("Equipped " .. (item.name or "item"), {0.6, 0.8, 1})
+                end
+            end
+        })
+    end
+
+    -- Drop item option
+    table.insert(options, {
+        text = "Drop",
+        action = function()
+            -- For now, drop the entire stack. Could be enhanced later with amount prompt
+            inventory.dropItemAtPlayer(inv, slotIndex)
+        end
+    })
+
+    -- Split stack option (for stackable items)
+    if item.stackable and item.count and item.count > 1 then
+        table.insert(options, {
+            text = "Split Stack",
+            action = function()
+                inventory.splitStack(inv, slotIndex)
+            end
+        })
+    end
+
+    -- Destroy item option (dangerous action)
+    table.insert(options, {
+        text = "Destroy",
+        action = function()
+            inventory.destroyItem(inv, slotIndex)
+        end
+    })
+
+    -- Create and show the context menu
+    local menu = context_menu.create(x, y, options)
+    -- Store menu reference for drawing
+    ui.showContextMenu(menu)
+end
+
+-- Drop item at player's feet helper function
+function inventory.dropItemAtPlayer(inv, slotIndex, opts)
+    local item = inv.items[slotIndex]
+    if not item then return false end
+
+    opts = opts or {}
+    local countToDrop = opts.count or (item.count or 1)
+
+    -- Validate drop amount
+    if countToDrop <= 0 or countToDrop > (item.count or 1) then
+        return false
+    end
+
+    -- Get player position from game state
+    local game = _G.game or require("game")
+    local gs = game.getState and game.getState() or nil
+    if not gs or not gs.player then return false end
+
+    -- Get world module for adding ground items
+    local world = _G.world or require("world")
+    if not world or not world.addGroundItem then return false end
+
+    -- Get ground items table from game state
+    local groundItems = gs.groundItems
+    if not groundItems then return false end
+
+    local droppedItem
+    if countToDrop >= (item.count or 1) then
+        -- Drop entire stack
+        droppedItem = item
+        inv.items[slotIndex] = nil
+    else
+        -- Drop partial stack - create new item instance
+        droppedItem = {}
+        for k, v in pairs(item) do
+            droppedItem[k] = v
+        end
+        droppedItem.count = countToDrop
+        item.count = item.count - countToDrop
+    end
+
+    -- Calculate drop position at player's feet (not center)
+    -- Player feet are approximately 14 pixels below the center position
+    local feetOffsetY = 14
+    local playerX, playerY = gs.player.x, gs.player.y
+    local dropX = playerX
+    local dropY = playerY + feetOffsetY
+
+    -- Add minor jitter so multiple drops don't perfectly overlap
+    local jx = love.math.random(-8, 8)
+    local jy = love.math.random(-4, 4)
+
+    -- Add item to ground at player's feet (temporary item)
+    world.addGroundItem(groundItems, droppedItem, dropX + jx, dropY + jy, false)
+
+    -- Add chat message
+    local itemName = droppedItem.name or "item"
+    local quantityText = (droppedItem.count and droppedItem.count > 1) and (" x" .. droppedItem.count) or ""
+    ui.addChatMessage("Dropped " .. itemName .. quantityText, {0.8, 0.6, 0.4})
+
+    return true
+end
+
 -- Legacy mouse handling (for backward compatibility)
 function inventory.handleClick(inv, x, y, button)
     if not inv.visible then return end
@@ -1559,19 +1645,19 @@ function inventory.isMouseOverInventory(mouseX, mouseY)
                 panelWidth = inventoryWidth
                 panelHeight = inventoryHeight
             elseif panelId == "equipment" then
-                -- Equipment panel uses stored position
-                panelX = panel.x or 0
-                panelY = panel.y or 0
+                -- Equipment panel uses stored position with offset (matches draw function)
+                panelX = (panel.x or 0) - 10
+                panelY = (panel.y or 0) - 30
                 local padding = panel.slotPadding or 5
-                panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
-                panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
+                panelWidth = (panel.cols * panel.slotSize) + ((panel.cols - 1) * padding) + panel.slotSize  -- Extra space for labels
+                panelHeight = (panel.rows * panel.slotSize) + ((panel.rows - 1) * padding) + 40  -- Extra space for title
             elseif panelId == "hotbar" then
                 -- Hotbar panel uses stored position (calculated in game.lua)
                 panelX = panel.x or 0
                 panelY = panel.y or 0
-                local padding = panel.slotPadding or 5
-                panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
-                panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
+                -- Use the same calculation as HotbarPanel:updateLayout
+                panelWidth = panel.cols * (panel.slotSize + panel.slotPadding) - panel.slotPadding
+                panelHeight = panel.rows * panel.slotSize + 10  -- Simplified height calculation
             else
                 -- Default calculation for other panels
                 panelX = panel.x or 0

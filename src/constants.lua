@@ -78,6 +78,7 @@ constants.FLOWER_SPAWN_RATE = 0.08 -- 8% chance for flowers in grasslands
 constants.CACTUS_SPAWN_RATE = 0.06 -- 6% chance for cacti in deserts
 constants.PALM_SPAWN_RATE = 0.08  -- 8% chance for palm trees on beaches
 constants.CHICKEN_SPAWN_RATE = 0.01 -- 1% chance for chickens in grasslands (very rare)
+constants.STICK_SPAWN_RATE = 0.08 -- 8% chance for sticks in grasslands
 constants.PLAYER_ATTACK_COOLDOWN = 2.0 -- 2 second cooldown between player attacks
 constants.INTERACTION_DISTANCE = 75 -- Interaction distance in pixels (about 2.5 tiles)
 

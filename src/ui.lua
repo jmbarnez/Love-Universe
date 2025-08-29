@@ -12,6 +12,7 @@ local uiState = {
     modals = {},
     tooltips = {},
     currentModal = nil,
+    contextMenu = nil,
     theme = {},
     chatWindow = {
         messages = {},
@@ -24,20 +25,26 @@ local uiState = {
     }
 }
 
--- Create consistent fonts for UI text that's not affected by scaling
-local barFont = love.graphics.newFont(10)
-local titleFont = love.graphics.newFont(14)
-local dialogFont = love.graphics.newFont(12)
-local chatFont = love.graphics.newFont(11)
-local smallFont = love.graphics.newFont(9)
+-- Scaled fonts (will be created in updateLayout)
+local barFont, titleFont, dialogFont, chatFont, smallFont
 
 -- Initialize UI system
 function ui.init()
     -- Create custom theme
     ui.createTheme()
-    
+
     -- Update UI positions based on current scaling
     ui.updateLayout()
+end
+
+-- Show context menu
+function ui.showContextMenu(menu)
+    uiState.contextMenu = menu
+end
+
+-- Hide context menu
+function ui.hideContextMenu()
+    uiState.contextMenu = nil
 end
 
 -- Update UI layout based on current screen size and scaling
@@ -47,7 +54,15 @@ function ui.updateLayout()
     uiState.chatWindow.width = constants.CHAT_WIDTH or math.floor(400 * constants.UI_SCALE)
     uiState.chatWindow.height = constants.CHAT_HEIGHT or math.floor(150 * constants.UI_SCALE)
     uiState.chatWindow.y = love.graphics.getHeight() - uiState.chatWindow.height - (constants.CHAT_BOTTOM_MARGIN or math.floor(10 * constants.UI_SCALE))
-    
+
+    -- Create scaled fonts based on current UI scale
+    local scale = constants.UI_SCALE or 1.0
+    barFont = love.graphics.newFont(math.max(8, math.floor(10 * scale)))
+    titleFont = love.graphics.newFont(math.max(10, math.floor(14 * scale)))
+    dialogFont = love.graphics.newFont(math.max(9, math.floor(12 * scale)))
+    chatFont = love.graphics.newFont(math.max(8, math.floor(11 * scale)))
+    smallFont = love.graphics.newFont(math.max(7, math.floor(9 * scale)))
+
     -- Update any other UI elements that need repositioning
     for _, window in pairs(uiState.windows) do
         if window.relativePosition then
@@ -56,7 +71,7 @@ function ui.updateLayout()
             window.y = window.relativePosition.y * love.graphics.getHeight()
         end
     end
-    
+
     -- Update inventory panels if they exist
     local inventory = require("src.inventory")
     if inventory and inventory.panelSystem and inventory.panelSystem.updateLayout then
@@ -684,6 +699,12 @@ function ui.draw()
     -- Draw confirmation dialog (on top of other UI)
     ui.drawConfirmDialog()
 
+    -- Draw context menu (on top of other UI)
+    if uiState.contextMenu then
+        local context_menu = require("src.context_menu")
+        context_menu.draw(uiState.contextMenu)
+    end
+
     -- Draw tooltip last (on top)
     ui.drawTooltip()
 
@@ -700,6 +721,8 @@ function ui.mousepressed(x, y, button)
     if ui.handleGroundItemSelectionMenuClick and ui.handleGroundItemSelectionMenuClick(x, y, button) then
         return true -- Selection menu consumed the click
     end
+
+
     
     -- Check all windows
     for windowId, window in pairs(uiState.windows) do
@@ -731,12 +754,23 @@ function ui.mousepressed(x, y, button)
             return true -- UI consumed the click
         end
     end
-    
+
+    -- Check context menu (hide if clicked outside)
+    if uiState.contextMenu then
+        local context_menu = require("src.context_menu")
+        if not context_menu.isPointInside(uiState.contextMenu, x, y) then
+            ui.hideContextMenu()
+            return true -- UI consumed the click (by hiding menu)
+        end
+    end
+
     return false -- UI did not consume the click
 end
 
 -- Ground item selection menu handling (set by game module to avoid circular dependencies)
 ui.handleGroundItemSelectionMenuClick = nil
+
+
 
 function ui.mousereleased(x, y, button)
     suit.mousereleased(x, y, button)

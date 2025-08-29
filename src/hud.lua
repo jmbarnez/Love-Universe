@@ -6,13 +6,17 @@ local constants = require("src.constants")
 local ui = require("src.ui")
 local lume = require("lib.lume")
 
--- Create a consistent font for HUD text that's not affected by UI scaling
-local hudFont = love.graphics.newFont(12)
+-- Scaled HUD font (will be created in draw function)
+local hudFont
 
 
 
 -- Draw enhanced HUD with new UI system
 function hud.draw(player, gameState)
+    -- Create scaled HUD font
+    local scale = constants.UI_SCALE or 1.0
+    hudFont = love.graphics.newFont(math.max(9, math.floor(12 * scale)))
+
     local barWidth = constants.HUD_BAR_WIDTH
     local barHeight = constants.HUD_BAR_HEIGHT
     local spacing = constants.HUD_BAR_SPACING

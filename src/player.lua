@@ -176,15 +176,16 @@ function player.drawHeroModel(x, y, r, g, b, p)
     -- Define colors
     local skinColor = {0.9, 0.7, 0.6}
     local armorColor = {r, g, b}
+    local shortsColor = {0.2, 0.4, 0.8}  -- Blue shorts
     local outlineColor = {0.3, 0.3, 0.3}
-    
-    -- Draw legs (behind body, scaled)
-    love.graphics.setColor(armorColor)
+
+    -- Draw legs (behind body, scaled) - blue shorts
+    love.graphics.setColor(shortsColor)
     love.graphics.rectangle("fill", x - 3 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)  -- Left leg
     love.graphics.rectangle("fill", x + 0.5 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)  -- Right leg
     
-    -- Draw body/torso (scaled)
-    love.graphics.setColor(armorColor)
+    -- Draw body/torso (scaled) - now skin color to show only shorts
+    love.graphics.setColor(skinColor)
     love.graphics.rectangle("fill", x - 4 * scale, y - 2 * scale, 8 * scale, 10 * scale)
     
     -- Draw arms (scaled)
@@ -233,15 +234,15 @@ function player.drawHeldItem(x, y, item, scale)
     if not item or not item.icon then
         return
     end
-    
+
     scale = scale or 1  -- Default scale if not provided
-    
-    -- Draw item icon in right hand (scaled)
+
+    -- Draw item icon in right hand (scaled) - bigger and closer to hand
     love.graphics.setColor(1, 1, 1)
-    local itemSize = 8 * scale
-    local handX = x + 5 * scale  -- Right hand position (scaled)
+    local itemSize = 12 * scale  -- Increased from 8 to 12 for bigger items
+    local handX = x + 3 * scale  -- Moved closer (from 5 to 3) for better hand positioning
     local handY = y + 1 * scale
-    
+
     love.graphics.draw(item.icon, handX, handY, 0, itemSize/32, itemSize/32)
 end
 

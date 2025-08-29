@@ -18,6 +18,7 @@ local armor = require("src.items.armor")
 local bow = require("src.items.bow")
 local shield = require("src.items.shield")
 local mana_potion = require("src.items.mana_potion")
+local stick = require("src.items.stick")
 local Camera = require("lib.hump.camera")
 local Timer = require("lib.hump.timer")
 local lume = require("lib.lume")
@@ -122,6 +123,8 @@ function game.init()
     -- Add some test items to inventory
     local feather = require("src.items.feather")
     inventory.addItem(gameState.inventory, feather.new())
+    inventory.addItem(gameState.inventory, stick.new())  -- Add a stick to inventory
+    inventory.addItem(gameState.inventory, stick.new())  -- Add another stick to test stacking
     inventory.addItem(gameState.inventory, sword.createSword())
     inventory.addItem(gameState.inventory, potion.createPotion())
     inventory.addItem(gameState.inventory, potion.createPotion())  -- Add another potion to test stacking
@@ -140,6 +143,7 @@ function game.init()
     equipmentPanel:addItem(shield.createShield()) -- Shield slot (4)
 
     -- Add some items to hotbar
+    hotbarPanel:addItem(stick.new())  -- Add a stick to hotbar
     hotbarPanel:addItem(potion.createPotion())
     hotbarPanel:addItem(mana_potion.createManaPotion())
     hotbarPanel:addItem(scroll.createSpellScroll())
@@ -211,7 +215,7 @@ function game.update(dt)
     end
 
     -- Update ground items (remove expired ones)
-    world.updateGroundItems(dt)
+    world.updateGroundItems(gameState.groundItems, dt)
     
     
     -- Update ground item hover state for tooltips
@@ -219,6 +223,8 @@ function game.update(dt)
     
     -- Update ground item selection menu
     game.updateGroundItemSelectionMenu(dt)
+
+
 end
 
 -- Update chickens
@@ -232,7 +238,7 @@ function game.updateChickens(dt)
             if gameState.chickens[x] and gameState.chickens[x][y] then
                 local chick = gameState.chickens[x][y]
                 chicken.update(chick, dt, gameState.gameTime,
-                              gameState.player.x, gameState.player.y, gameState.player, game.addDamageNumber)
+                              gameState.player.x, gameState.player.y, gameState.player, game.addDamageNumber, gameState.groundItems)
                 -- Update flash effect
                 damage_effects.updateFlash(chick, dt)
             end
@@ -354,7 +360,7 @@ function game.tryAttackChicken()
         -- Set player in combat (chicken will handle its own combat state)
         gameState.player.inCombat = true
 
-        local died = chicken.attack(closestChicken, gameState.player, gameState.gameTime, game.addDamageNumber)
+        local died = chicken.attack(closestChicken, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
         if died then
             -- Remove dead chicken from the game
             gameState.chickens[closestTileX][closestTileY] = nil
@@ -433,7 +439,7 @@ function game.handleMousePress(x, y, button)
     elseif button == 2 then -- Right-click
         local worldX, worldY = gameState.camera:worldCoords(x, y)
         local clickedItem, itemIndex, pile = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
-        
+
         if clickedItem and pile and #pile.items > 1 then
             -- Multiple items stacked - show selection menu
             game.showGroundItemSelectionMenu(pile, x, y)
@@ -592,10 +598,9 @@ function game.draw()
     -- Draw damage numbers
     game.drawDamageNumbers()
 
-    -- Draw ground items
+    -- Draw ground items (both temporary and permanent)
     world.drawGroundItems(gameState.groundItems, gameState.camera)
-    
-    
+
     -- Draw ground item interaction outlines
     local interactionOutline = require("src.interaction_outline")
     world.drawGroundItemOutlines(gameState.groundItems, gameState.mouse.worldX, gameState.mouse.worldY, interactionOutline)
@@ -645,6 +650,8 @@ function game.draw()
     
     -- Draw ground item selection menu (after UI)
     game.drawGroundItemSelectionMenu()
+
+
     
     -- Debug messages now handled by chat window
 end
@@ -796,7 +803,7 @@ function game.performAutoAttack()
     local tileY = gameState.playerTarget.tileY
 
             -- Perform the attack
-    local died = chicken.attack(target, gameState.player, gameState.gameTime, game.addDamageNumber)
+    local died = chicken.attack(target, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
     if died then
         -- Remove dead chicken from the game
         gameState.chickens[tileX][tileY] = nil
@@ -878,7 +885,7 @@ function game.executeAttackOnTarget(targetEntity)
                 
                 -- Execute immediate attack if off cooldown
                 if game.canPlayerAttack() then
-                    local died = chicken.attack(targetEntity, gameState.player, gameState.gameTime, game.addDamageNumber)
+                    local died = chicken.attack(targetEntity, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
                     if died then
                         gameState.chickens[x][y] = nil
                         gameState.targetClearTime = gameState.gameTime + 2.0
@@ -940,6 +947,11 @@ function game.setWindow()
     
     -- Update UI scaling based on new dimensions
     constants.updateUIScale()
+
+    -- Update UI layout to reposition elements for new screen size
+    if ui and ui.updateLayout then
+        ui.updateLayout()
+    end
 
     love.graphics.setBackgroundColor(unpack(constants.BACKGROUND_COLOR))
 end
@@ -1124,5 +1136,7 @@ function game.handleGroundItemSelectionMenuClick(x, y, button)
         return true -- Block the click from reaching the world
     end
 end
+
+
 
 return game

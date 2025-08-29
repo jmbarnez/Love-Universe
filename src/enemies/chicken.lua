@@ -45,19 +45,19 @@ function chicken.create(worldX, worldY)
 end
 
 -- Update chicken (combat AI and timers)
-function chicken.update(chick, dt, currentTime, playerX, playerY, player, onDamage)
+function chicken.update(chick, dt, currentTime, playerX, playerY, player, onDamage, groundItems)
     if not chick.alive then return end
 
     -- Use the new combat system
     combat.update(chick, dt, currentTime, playerX, playerY, player, onDamage)
 
     if chick.health <= 0 and chick.alive then
-        chicken.die(chick)
+        chicken.die(chick, groundItems)
     end
 end
 
 -- Called when a chicken dies
-function chicken.die(chick)
+function chicken.die(chick, groundItems)
     chick.alive = false
     local world = require("src.world")
     local item_definitions = {
@@ -73,7 +73,8 @@ function chicken.die(chick)
                 if num_items > 0 then
                     local item_drop = item_def.new()
                     item_drop.count = num_items
-                    world.addGroundItem(item_drop, chick.worldX, chick.worldY)
+                    -- Add slight vertical offset for items to appear above ground
+                    world.addGroundItem(groundItems, item_drop, chick.worldX, chick.worldY + 2, false) -- false = temporary
                 end
             end
         end
@@ -139,17 +140,17 @@ function chicken.canInteract(playerX, playerY, chick)
 end
 
 -- Attack a chicken (damage it)
-function chicken.attack(chick, player, currentTime, onDamage)
+function chicken.attack(chick, player, currentTime, onDamage, groundItems)
     if not chick.alive then return false end
 
     -- Use the new combat system for player attacks
     local died = combat.playerAttack(chick, player, currentTime, onDamage)
-    
+
     -- If the chicken died, call the die function immediately
     if died and chick.alive then
-        chicken.die(chick)
+        chicken.die(chick, groundItems)
     end
-    
+
     return died
 end
 

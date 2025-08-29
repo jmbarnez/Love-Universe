@@ -47,9 +47,11 @@ function damage_effects.drawDamageNumber(damageNum, camera)
         alpha = damageNum.lifetime / DAMAGE_NUMBER_FADE_START
     end
 
-    -- Set font for damage numbers
+    -- Set font for damage numbers (scaled)
     love.graphics.setColor(damageNum.color[1], damageNum.color[2], damageNum.color[3], alpha)
-    love.graphics.setFont(love.graphics.newFont(DAMAGE_NUMBER_FONT_SIZE))
+    local scale = constants.UI_SCALE or 1.0
+    local scaledFontSize = math.max(12, math.floor(DAMAGE_NUMBER_FONT_SIZE * scale))
+    love.graphics.setFont(love.graphics.newFont(scaledFontSize))
 
     -- Draw damage number with slight shadow for better visibility
     love.graphics.setColor(0, 0, 0, alpha * 0.7)

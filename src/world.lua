@@ -6,6 +6,9 @@ local constants = require("src.constants")
 local chicken = require("src.enemies.chicken")
 local lume = require("lib.lume")
 
+-- Ground items storage (will be set by game module)
+world.groundItems = nil
+
 -- Generate height map (pixel-based)
 function world.generateHeightMap()
     local heightMap = {}
@@ -136,10 +139,11 @@ function world.getBiome(height, temperature, humidity, x, y)
     return {type = "grassland", color = {0.25, 0.6, 0.2}, walkable = true}
 end
 
--- Generate scattered objects (only chickens) - pixel-based
+-- Generate scattered objects (chickens and ground items) - pixel-based
 function world.generateObjects(gameWorld)
     local objects = {}
     local chickens = {}
+    local groundItems = {}
 
     -- Initialize empty objects and chickens tables (still use tile grid for storage)
     local tilesX = math.ceil(constants.WORLD_WIDTH / constants.TILE_SIZE)
@@ -208,7 +212,52 @@ function world.generateObjects(gameWorld)
         end
     end
 
-    return objects, chickens
+    -- Spawn sticks in any grassy biome as world items (permanent, with random rotations)
+    local sticksSpawned = 0
+    local maxSticks = 50  -- Maximum number of sticks to spawn
+
+    -- Define grassy tile types where sticks can spawn
+    local grassyTileTypes = {
+        "grassland",
+        "hills",
+        "forest",
+        "dark_forest"
+    }
+
+    for x = 1, tilesX do
+        for y = 1, tilesY do
+            local tile = gameWorld[x][y]
+            if tile and sticksSpawned < maxSticks then
+                -- Check if this tile type is grassy
+                local isGrassy = false
+                for _, grassyType in ipairs(grassyTileTypes) do
+                    if tile.type == grassyType then
+                        isGrassy = true
+                        break
+                    end
+                end
+
+                if isGrassy then
+                    local spawnChance = love.math.random()
+                    if spawnChance < constants.STICK_SPAWN_RATE then
+                        -- Spawn stick at random pixel coordinates within this tile
+                        local tileLeft = (x - 1) * constants.TILE_SIZE
+                        local tileTop = (y - 1) * constants.TILE_SIZE
+                        local pixelX = tileLeft + love.math.random(0, constants.TILE_SIZE - 1)
+                        local pixelY = tileTop + love.math.random(0, constants.TILE_SIZE - 1)
+
+                        -- Create a stick item and add it as a permanent ground item with random rotation
+                        local stick = require("src.items.stick")
+                        local stickItem = stick.new()
+                        world.addGroundItem(groundItems, stickItem, pixelX, pixelY + 2, true) -- true = permanent
+                        sticksSpawned = sticksSpawned + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return objects, chickens, groundItems
 end
 
 -- Generate procedural world with realistic biomes
@@ -238,43 +287,43 @@ function world.generate()
         end
     end
 
-    -- Generate scattered objects and chickens
-    local objects, chickens = world.generateObjects(gameWorld)
-
-    -- Initialize ground items table
-    local groundItems = {}
+    -- Generate scattered objects, chickens, and ground items
+    local objects, chickens, groundItems = world.generateObjects(gameWorld)
 
     return gameWorld, objects, chickens, groundItems
 end
 
 -- Add a ground item to the world
-function world.addGroundItem(item, x, y)
-    if world.groundItems then
-        table.insert(world.groundItems, {
+function world.addGroundItem(groundItems, item, x, y, permanent)
+    if groundItems then
+        table.insert(groundItems, {
             item = item,
             x = x,
             y = y,
+            rotation = permanent and (love.math.random() * 2 * math.pi) or 0, -- Random rotation for permanent items
             createdTime = love.timer.getTime(), -- Timestamp when item was dropped
-            expireTime = 30.0 -- 30 seconds
+            expireTime = permanent and nil or 30.0 -- Permanent items don't expire, others expire in 30 seconds
         })
     end
 end
 
+
+
 -- Update ground items and remove expired ones
-function world.updateGroundItems(dt)
-    if not world.groundItems then
+function world.updateGroundItems(groundItems, dt)
+    if not groundItems then
         return
     end
 
     local currentTime = love.timer.getTime()
     local i = 1
-    while i <= #world.groundItems do
-        local groundItem = world.groundItems[i]
+    while i <= #groundItems do
+        local groundItem = groundItems[i]
         if groundItem.createdTime and groundItem.expireTime then
             local age = currentTime - groundItem.createdTime
             if age >= groundItem.expireTime then
                 -- Item has expired, remove it
-                table.remove(world.groundItems, i)
+                table.remove(groundItems, i)
             else
                 i = i + 1
             end
@@ -303,17 +352,31 @@ function world.drawGroundItems(groundItems, camera)
         local item = groundItem.item
         
         if item.icon then
-            -- Draw the actual icon image
+            -- Draw the actual icon image with rotation if it's a permanent item
             love.graphics.setColor(1, 1, 1, 1)
             local iconSize = 24 -- Size of ground item icon
             local iconScale = iconSize / 32 -- Scale from 32x32 to desired size
-            love.graphics.draw(item.icon, groundItem.x - iconSize/2, groundItem.y - iconSize/2, 0, iconScale, iconScale)
+            local rotation = groundItem.rotation or 0
+            love.graphics.draw(item.icon,
+                              groundItem.x, groundItem.y,
+                              rotation,
+                              iconScale, iconScale,
+                              16, 16) -- Origin at center of 32x32 icon
         else
-            -- Fallback: draw colored rectangle if no icon
+            -- Fallback: draw colored rectangle if no icon (with rotation for permanent items)
             local itemColor = item.color or {0.8, 0.8, 0.8, 1}
             love.graphics.setColor(itemColor)
             local iconSize = 20
-            love.graphics.rectangle("fill", groundItem.x - iconSize/2, groundItem.y - iconSize/2, iconSize, iconSize)
+            local rotation = groundItem.rotation or 0
+            if rotation > 0 then
+                love.graphics.push()
+                love.graphics.translate(groundItem.x, groundItem.y)
+                love.graphics.rotate(rotation)
+                love.graphics.rectangle("fill", -iconSize/2, -iconSize/2, iconSize, iconSize)
+                love.graphics.pop()
+            else
+                love.graphics.rectangle("fill", groundItem.x - iconSize/2, groundItem.y - iconSize/2, iconSize, iconSize)
+            end
         end
         
         -- Draw item count if stackable and count > 1
@@ -333,10 +396,12 @@ function world.drawGroundItems(groundItems, camera)
             love.graphics.print(countText, groundItem.x + 10, groundItem.y + 9)
         end
     end
-    
+
     -- Reset color
     love.graphics.setColor(1, 1, 1)
 end
+
+
 
 -- Update ground item hover state for tooltips (now handles piles)
 function world.updateGroundItemHover(dt, mouseWorldX, mouseWorldY, groundItems)
@@ -609,7 +674,7 @@ end
 function world.getGroundItemAtPosition(worldX, worldY, groundItems)
     local checkRadius = 20 -- pixels - increased for better interaction
     local piles = world.groupItemsByLocation(groundItems)
-    
+
     -- Find the closest pile within interaction range
     for _, pile in ipairs(piles) do
         local distance = lume.distance(pile.centerX, pile.centerY, worldX, worldY)
@@ -628,6 +693,8 @@ function world.getGroundItemAtPosition(worldX, worldY, groundItems)
     end
     return nil
 end
+
+
 
 
 -- Convert screen coordinates to world coordinates (pixel-based)
