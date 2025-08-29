@@ -1,5 +1,6 @@
 local mana_potion = {}
 local base = require("src.items.base")
+local ui = require("src.ui")
 
 local function createManaPotionIcon()
     return base.getCachedIcon("manaPotion", function()

@@ -33,7 +33,7 @@ constants.TILE_SIZE = 32      -- Size of visual tiles for rendering
 -- Player settings
 constants.PLAYER_SPEED = 100 -- Normal walking speed (pixels per second)
 constants.PLAYER_SPRINT_SPEED = 200 -- 2x speed when sprinting (pixels per second)
-constants.PLAYER_SIZE = 20  -- Increased for better visibility
+constants.PLAYER_SIZE = 32  -- Perfect size for detailed hero model
 constants.PLAYER_COLOR = {0.4, 1.0, 0.4} -- Brighter green player for better visibility
 constants.PLAYER_MAX_STAMINA = 100
 constants.STAMINA_DRAIN_RATE = 20 -- Stamina drained per second while sprinting
@@ -98,24 +98,59 @@ constants.HEALTH_BAR_HEIGHT = 20
 
 -- UI scaling - will be updated at runtime
 constants.UI_SCALE = 1.0
+
+-- Base UI dimensions (unscaled)
+constants.BASE_HUD_BAR_WIDTH = 200
+constants.BASE_HUD_BAR_HEIGHT = 20
+constants.BASE_HUD_BAR_SPACING = 30
+constants.BASE_HUD_START_Y = 20
+constants.BASE_HUD_MARGIN_X = 10
+constants.BASE_INVENTORY_HINT_Y_OFFSET = 25
+constants.BASE_TOOLTIP_Y_OFFSET = 20
+constants.BASE_HEALTH_BAR_Y_OFFSET = 32
+constants.BASE_CHAT_BOTTOM_MARGIN = 10
+constants.BASE_HOTBAR_BOTTOM_MARGIN = 60
+
+-- Scaled UI values (updated at runtime)
 constants.HUD_BAR_WIDTH = 200
 constants.HUD_BAR_HEIGHT = 20
 constants.HUD_BAR_SPACING = 30
 constants.HUD_START_Y = 20
 constants.HUD_MARGIN_X = 10
+constants.INVENTORY_HINT_Y_OFFSET = 25
+constants.TOOLTIP_Y_OFFSET = 20
+constants.HEALTH_BAR_Y_OFFSET = 32
+constants.CHAT_BOTTOM_MARGIN = 10
+constants.HOTBAR_BOTTOM_MARGIN = 60
 
 -- Function to update UI scaling
 function constants.updateUIScale()
     -- Combine automatic scaling with manual scaling factor
     local autoScale = math.min(constants.GAME_WIDTH / 1280, constants.GAME_HEIGHT / 720)
     constants.UI_SCALE = autoScale * constants.DISPLAY_CONFIG.uiScale
-    
-    -- Update scaled UI values
-    constants.HUD_BAR_WIDTH = math.floor(200 * constants.UI_SCALE)
-    constants.HUD_BAR_HEIGHT = math.floor(20 * constants.UI_SCALE)
-    constants.HUD_BAR_SPACING = math.floor(30 * constants.UI_SCALE)
-    constants.HUD_START_Y = math.floor(20 * constants.UI_SCALE)
-    constants.HUD_MARGIN_X = math.floor(10 * constants.UI_SCALE)
+
+    -- Update scaled HUD values
+    constants.HUD_BAR_WIDTH = math.floor(constants.BASE_HUD_BAR_WIDTH * constants.UI_SCALE)
+    constants.HUD_BAR_HEIGHT = math.floor(constants.BASE_HUD_BAR_HEIGHT * constants.UI_SCALE)
+    constants.HUD_BAR_SPACING = math.floor(constants.BASE_HUD_BAR_SPACING * constants.UI_SCALE)
+    constants.HUD_START_Y = math.floor(constants.BASE_HUD_START_Y * constants.UI_SCALE)
+    constants.HUD_MARGIN_X = math.floor(constants.BASE_HUD_MARGIN_X * constants.UI_SCALE)
+    constants.INVENTORY_HINT_Y_OFFSET = math.floor(constants.BASE_INVENTORY_HINT_Y_OFFSET * constants.UI_SCALE)
+    constants.TOOLTIP_Y_OFFSET = math.floor(constants.BASE_TOOLTIP_Y_OFFSET * constants.UI_SCALE)
+    constants.HEALTH_BAR_Y_OFFSET = math.floor(constants.BASE_HEALTH_BAR_Y_OFFSET * constants.UI_SCALE)
+    constants.CHAT_BOTTOM_MARGIN = math.floor(constants.BASE_CHAT_BOTTOM_MARGIN * constants.UI_SCALE)
+    constants.HOTBAR_BOTTOM_MARGIN = math.floor(constants.BASE_HOTBAR_BOTTOM_MARGIN * constants.UI_SCALE)
+
+    -- Update scaled UI sizes
+    constants.TOOLTIP_WIDTH = math.floor(250 * constants.UI_SCALE)
+    constants.TOOLTIP_HEIGHT = math.floor(60 * constants.UI_SCALE)
+    constants.CHAT_WIDTH = math.floor(400 * constants.UI_SCALE)
+    constants.CHAT_HEIGHT = math.floor(150 * constants.UI_SCALE)
+    constants.DIALOG_WIDTH = math.floor(300 * constants.UI_SCALE)
+    constants.DIALOG_HEIGHT = math.floor(120 * constants.UI_SCALE)
+    constants.INVENTORY_SLOT_SIZE = math.floor(40 * constants.UI_SCALE)
+    constants.INVENTORY_SLOT_PADDING = math.floor(2 * constants.UI_SCALE)
+    constants.INVENTORY_MARGIN = math.floor(10 * constants.UI_SCALE)
 end
 
 -- Graphics settings

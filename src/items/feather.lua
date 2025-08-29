@@ -2,6 +2,7 @@ local feather = {}
 feather.__index = feather
 
 local base = require("src.items.base")
+local ui = require("src.ui")
 
 -- Draw a feather icon
 local function createFeatherIcon()

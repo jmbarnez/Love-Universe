@@ -250,9 +250,48 @@ end
 -- Add a ground item to the world
 function world.addGroundItem(item, x, y)
     if world.groundItems then
-        table.insert(world.groundItems, {item = item, x = x, y = y})
+        table.insert(world.groundItems, {
+            item = item,
+            x = x,
+            y = y,
+            createdTime = love.timer.getTime(), -- Timestamp when item was dropped
+            expireTime = 30.0 -- 30 seconds
+        })
     end
 end
+
+-- Update ground items and remove expired ones
+function world.updateGroundItems(dt)
+    if not world.groundItems then
+        return
+    end
+
+    local currentTime = love.timer.getTime()
+    local i = 1
+    while i <= #world.groundItems do
+        local groundItem = world.groundItems[i]
+        if groundItem.createdTime and groundItem.expireTime then
+            local age = currentTime - groundItem.createdTime
+            if age >= groundItem.expireTime then
+                -- Item has expired, remove it
+                table.remove(world.groundItems, i)
+            else
+                i = i + 1
+            end
+        else
+            i = i + 1
+        end
+    end
+end
+
+-- Ground item hover state for tooltips (now handles piles)
+local groundItemHover = {
+    pile = nil, -- Now stores the entire pile instead of single item
+    time = 0,
+    tooltipDelay = 0.15,
+    x = 0,
+    y = 0
+}
 
 -- Draw ground items
 function world.drawGroundItems(groundItems, camera)
@@ -261,42 +300,335 @@ function world.drawGroundItems(groundItems, camera)
     end
     
     for i, groundItem in ipairs(groundItems) do
+        local item = groundItem.item
         
-        -- Draw a glowing circle for better visibility
-        love.graphics.setColor(1, 1, 0, 0.8) -- Yellow with transparency
-        love.graphics.circle("fill", groundItem.x, groundItem.y, 8)
+        if item.icon then
+            -- Draw the actual icon image
+            love.graphics.setColor(1, 1, 1, 1)
+            local iconSize = 24 -- Size of ground item icon
+            local iconScale = iconSize / 32 -- Scale from 32x32 to desired size
+            love.graphics.draw(item.icon, groundItem.x - iconSize/2, groundItem.y - iconSize/2, 0, iconScale, iconScale)
+        else
+            -- Fallback: draw colored rectangle if no icon
+            local itemColor = item.color or {0.8, 0.8, 0.8, 1}
+            love.graphics.setColor(itemColor)
+            local iconSize = 20
+            love.graphics.rectangle("fill", groundItem.x - iconSize/2, groundItem.y - iconSize/2, iconSize, iconSize)
+        end
         
-        -- Draw outline
-        love.graphics.setColor(1, 0.8, 0, 1) -- Golden outline
-        love.graphics.circle("line", groundItem.x, groundItem.y, 8)
-
-        -- Draw item name with background for better readability
-        love.graphics.setColor(0, 0, 0, 0.7) -- Dark background
-        local text = groundItem.item.name .. " (" .. groundItem.item.count .. ")"
-        local font = love.graphics.getFont()
-        local textWidth = font:getWidth(text)
-        local textHeight = font:getHeight()
-        love.graphics.rectangle("fill", groundItem.x + 10, groundItem.y - 5, textWidth + 4, textHeight + 2)
-        
-        love.graphics.setColor(1, 1, 1) -- White text
-        love.graphics.print(text, groundItem.x + 12, groundItem.y - 4)
+        -- Draw item count if stackable and count > 1
+        if item.count and item.count > 1 then
+            love.graphics.setColor(1, 1, 1, 1)
+            local countText = tostring(item.count)
+            local font = love.graphics.getFont()
+            local textWidth = font:getWidth(countText)
+            local textHeight = font:getHeight()
+            
+            -- Draw dark background for text
+            love.graphics.setColor(0, 0, 0, 0.8)
+            love.graphics.rectangle("fill", groundItem.x + 8, groundItem.y + 8, textWidth + 4, textHeight + 2)
+            
+            -- Draw count text
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print(countText, groundItem.x + 10, groundItem.y + 9)
+        end
     end
     
     -- Reset color
     love.graphics.setColor(1, 1, 1)
 end
 
-function world.getGroundItemAtPosition(worldX, worldY, groundItems)
-    local checkRadius = 10 -- pixels
-    for i = #groundItems, 1, -1 do
-        local groundItem = groundItems[i]
-        local distance = lume.distance(groundItem.x, groundItem.y, worldX, worldY)
+-- Update ground item hover state for tooltips (now handles piles)
+function world.updateGroundItemHover(dt, mouseWorldX, mouseWorldY, groundItems)
+    if not groundItems then
+        groundItemHover.pile = nil
+        groundItemHover.time = 0
+        return
+    end
+    
+    local hoveredPile = nil
+    local checkRadius = 20 -- pixels - interaction radius
+    local piles = world.groupItemsByLocation(groundItems)
+    
+    -- Check if mouse is over any item pile
+    for _, pile in ipairs(piles) do
+        local distance = lume.distance(pile.centerX, pile.centerY, mouseWorldX, mouseWorldY)
         if distance <= checkRadius then
-            return groundItem, i
+            hoveredPile = pile
+            break
+        end
+    end
+    
+    if hoveredPile then
+        if groundItemHover.pile and 
+           groundItemHover.pile.centerX == hoveredPile.centerX and 
+           groundItemHover.pile.centerY == hoveredPile.centerY then
+            groundItemHover.time = groundItemHover.time + dt
+        else
+            groundItemHover.pile = hoveredPile
+            groundItemHover.time = 0
+            groundItemHover.x = mouseWorldX
+            groundItemHover.y = mouseWorldY
+        end
+    else
+        groundItemHover.pile = nil
+        groundItemHover.time = 0
+    end
+end
+
+-- Draw ground item tooltip (now handles item piles with stacked tooltips)
+function world.drawGroundItemTooltip(camera)
+    if not groundItemHover.pile or groundItemHover.time < groundItemHover.tooltipDelay then
+        return
+    end
+    
+    local pile = groundItemHover.pile
+    if not pile or not pile.items or #pile.items == 0 then return end
+    
+    -- Convert world position to screen position for tooltip
+    local screenX, screenY = world.worldToScreen(groundItemHover.x, groundItemHover.y, camera)
+    local tooltipX = screenX + 15
+    local tooltipY = screenY - 10
+    
+    -- Build tooltip content for all items in the pile
+    local lines = {}
+    local itemCounts = {} -- Track item types and their total counts
+    
+    -- Group items by name and sum their counts
+    for _, groundItem in ipairs(pile.items) do
+        local item = groundItem.item
+        local itemName = item.name or "Unknown Item"
+        
+        if not itemCounts[itemName] then
+            itemCounts[itemName] = {
+                item = item,
+                count = 0
+            }
+        end
+        itemCounts[itemName].count = itemCounts[itemName].count + (item.count or 1)
+    end
+    
+    -- If multiple item types, show pile header
+    if next(itemCounts, next(itemCounts)) then -- More than one item type
+        table.insert(lines, "=== Item Pile (" .. #pile.items .. " items) ===")
+        table.insert(lines, "") -- Empty line for spacing
+    end
+    
+    -- Add each unique item type to tooltip
+    for itemName, itemData in pairs(itemCounts) do
+        local item = itemData.item
+        local totalCount = itemData.count
+        
+        -- Item name with count if > 1
+        if totalCount > 1 then
+            table.insert(lines, itemName .. " (x" .. totalCount .. ")")
+        else
+            table.insert(lines, itemName)
+        end
+        
+        -- Add item details for first occurrence (avoid repetition)
+        if item.description then
+            table.insert(lines, "  " .. item.description)
+        end
+        
+        if item.type then
+            table.insert(lines, "  Type: " .. item.type)
+        end
+        
+        if item.rarity then
+            table.insert(lines, "  Rarity: " .. item.rarity)
+        end
+        
+        table.insert(lines, "") -- Empty line between item types
+    end
+    
+    -- Remove last empty line
+    if #lines > 0 and lines[#lines] == "" then
+        table.remove(lines)
+    end
+    
+    -- Calculate tooltip dimensions
+    local font = love.graphics.getFont()
+    local maxWidth = 0
+    local totalHeight = 0
+    local lineHeight = font:getHeight() + 2
+    
+    for _, line in ipairs(lines) do
+        local width = font:getWidth(line)
+        maxWidth = math.max(maxWidth, width)
+        totalHeight = totalHeight + lineHeight
+    end
+    
+    local tooltipWidth = maxWidth + 16
+    local tooltipHeight = totalHeight + 8
+    
+    -- Keep tooltip on screen
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+    
+    if tooltipX + tooltipWidth > screenWidth then
+        tooltipX = screenX - tooltipWidth - 15
+    end
+    
+    if tooltipY + tooltipHeight > screenHeight then
+        tooltipY = screenY - tooltipHeight - 10
+    end
+    
+    if tooltipY < 0 then
+        tooltipY = screenY + 20
+    end
+    
+    -- Get UI colors from ui module if available
+    local ui = require("src.ui")
+    local colors = (ui and ui.uiState and ui.uiState.theme and ui.uiState.theme.colors) or {
+        panel = {0.12, 0.12, 0.18, 0.95},
+        border = {0.4, 0.3, 0.2, 1.0},
+        text = {0.9, 0.85, 0.8, 1.0}
+    }
+    
+    -- Draw tooltip background
+    love.graphics.setColor(colors.panel)
+    if ui and ui.drawRoundedRect then
+        ui.drawRoundedRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 6)
+    else
+        love.graphics.rectangle("fill", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
+    end
+    
+    -- Draw tooltip border
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    if ui and ui.drawRoundedRectOutline then
+        ui.drawRoundedRectOutline(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 6)
+    else
+        love.graphics.rectangle("line", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
+    end
+    love.graphics.setLineWidth(1)
+    
+    -- Draw tooltip text
+    love.graphics.setColor(colors.text)
+    local yOffset = tooltipY + 6
+    for _, line in ipairs(lines) do
+        love.graphics.print(line, tooltipX + 8, yOffset)
+        yOffset = yOffset + lineHeight
+    end
+    
+    -- Reset color
+    love.graphics.setColor(1, 1, 1)
+end
+
+-- Group nearby items into piles for better interaction handling
+function world.groupItemsByLocation(groundItems)
+    local piles = {}
+    local pileRadius = 25 -- pixels - items within this distance are grouped together
+    
+    for _, groundItem in ipairs(groundItems) do
+        local foundPile = false
+        
+        -- Check if this item belongs to an existing pile
+        for _, pile in ipairs(piles) do
+            local distance = lume.distance(groundItem.x, groundItem.y, pile.centerX, pile.centerY)
+            if distance <= pileRadius then
+                table.insert(pile.items, groundItem)
+                -- Update pile center to average of all items
+                local totalX, totalY = 0, 0
+                for _, item in ipairs(pile.items) do
+                    totalX = totalX + item.x
+                    totalY = totalY + item.y
+                end
+                pile.centerX = totalX / #pile.items
+                pile.centerY = totalY / #pile.items
+                foundPile = true
+                break
+            end
+        end
+        
+        -- If no pile found, create a new one
+        if not foundPile then
+            table.insert(piles, {
+                centerX = groundItem.x,
+                centerY = groundItem.y,
+                items = {groundItem}
+            })
+        end
+    end
+    
+    return piles
+end
+
+-- Draw interaction outline for ground items (handles item piles)
+function world.drawGroundItemOutlines(groundItems, mouseWorldX, mouseWorldY, interactionOutline)
+    if not groundItems or not interactionOutline then
+        return
+    end
+    
+    local checkRadius = 20 -- pixels - interaction radius
+    local piles = world.groupItemsByLocation(groundItems)
+    
+    -- Find the closest pile within interaction range
+    for _, pile in ipairs(piles) do
+        local distance = lume.distance(pile.centerX, pile.centerY, mouseWorldX, mouseWorldY)
+        if distance <= checkRadius then
+            local itemCount = #pile.items
+            
+            if itemCount == 1 then
+                -- Single item - draw tight outline around icon
+                local item = pile.items[1].item
+                local iconSize = item.icon and 24 or 20
+                
+                love.graphics.setColor(1, 1, 0, 0.8) -- Yellow outline
+                love.graphics.rectangle("line", 
+                    pile.centerX - iconSize/2 - 1, 
+                    pile.centerY - iconSize/2 - 1, 
+                    iconSize + 2, 
+                    iconSize + 2)
+            else
+                -- Multiple items - draw circular outline around the pile
+                local pileRadius = math.max(15, itemCount * 3) -- Scale radius with item count
+                love.graphics.setColor(1, 1, 0, 0.8) -- Yellow outline
+                love.graphics.setLineWidth(2)
+                love.graphics.circle("line", pile.centerX, pile.centerY, pileRadius)
+                love.graphics.setLineWidth(1)
+                
+                -- Draw item count indicator
+                love.graphics.setColor(1, 1, 1, 0.9)
+                love.graphics.circle("fill", pile.centerX + pileRadius - 5, pile.centerY - pileRadius + 5, 8)
+                love.graphics.setColor(0, 0, 0, 1)
+                local font = love.graphics.getFont()
+                local countText = tostring(itemCount)
+                local textWidth = font:getWidth(countText)
+                love.graphics.print(countText, pile.centerX + pileRadius - 5 - textWidth/2, pile.centerY - pileRadius + 5 - 6)
+            end
+            
+            love.graphics.setColor(1, 1, 1) -- Reset color
+            break -- Only outline one pile at a time
+        end
+    end
+end
+
+-- Get ground items at position (now returns the closest pile)
+function world.getGroundItemAtPosition(worldX, worldY, groundItems)
+    local checkRadius = 20 -- pixels - increased for better interaction
+    local piles = world.groupItemsByLocation(groundItems)
+    
+    -- Find the closest pile within interaction range
+    for _, pile in ipairs(piles) do
+        local distance = lume.distance(pile.centerX, pile.centerY, worldX, worldY)
+        if distance <= checkRadius then
+            -- Return the first item from the pile and its index in the original groundItems array
+            if pile.items and #pile.items > 0 then
+                local firstItem = pile.items[1]
+                -- Find the index in the original groundItems array
+                for i, groundItem in ipairs(groundItems) do
+                    if groundItem == firstItem then
+                        return groundItem, i, pile -- Return the pile as well for multi-pickup
+                    end
+                end
+            end
         end
     end
     return nil
 end
+
 
 -- Convert screen coordinates to world coordinates (pixel-based)
 function world.screenToWorld(screenX, screenY, camera)

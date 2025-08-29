@@ -32,7 +32,9 @@ function player.create(worldX, worldY)
         name = "Player",
         inCombat = false,
         -- Effects
-        flashTimer = nil
+        flashTimer = nil,
+        -- Equipment/items
+        selectedHotbarSlot = nil  -- Which hotbar slot is currently selected (1-10)
     }
 
     return p
@@ -141,39 +143,147 @@ function player.draw(p, camera)
     -- World coordinates are already converted to screen by game's translate
     local screenX = p.x
     local screenY = p.y
-
-    -- Player shadow
-    love.graphics.setColor(0, 0, 0, 0.3)
-    love.graphics.circle("fill", screenX + 1, screenY + 1, p.size / 2)
-
+    
     -- Calculate flash color multiplier
     local flashR, flashG, flashB = 1, 1, 1
     if p.flashTimer and p.flashTimer > 0 then
         flashR, flashG, flashB = 1.5, 1.5, 1.5 -- Bright white flash
     end
-
-    -- Player body - changes color when sprinting or flashing
+    
+    -- Player body color - changes when sprinting or flashing
     local bodyR, bodyG, bodyB = p.color[1], p.color[2], p.color[3]
     if p.isSprinting then
         -- Sprinting color (lighter/different shade)
         bodyR, bodyG, bodyB = p.color[1] * 1.3, p.color[2] * 1.3, p.color[3] * 0.8
     end
-
-    love.graphics.setColor(bodyR * flashR, bodyG * flashG, bodyB * flashB)
-    love.graphics.circle("fill", screenX, screenY, p.size / 2)
-
-    -- Player outline - also changes when sprinting or flashing
-    local outlineR, outlineG, outlineB = 1, 1, 1
-    if p.isSprinting then
-        outlineR, outlineG, outlineB = 1, 0.8, 0 -- Orange outline when sprinting
-    end
-
-    love.graphics.setColor(outlineR * flashR, outlineG * flashG, outlineB * flashB)
-    love.graphics.circle("line", screenX, screenY, p.size / 2)
-
+    
+    local finalR = bodyR * flashR
+    local finalG = bodyG * flashG  
+    local finalB = bodyB * flashB
+    
+    -- Draw basic hero model
+    player.drawHeroModel(screenX, screenY, finalR, finalG, finalB, p)
+    
     -- Draw combat UI (health bar and label) if in combat or damaged
     local entity_ui = require("src.entity_ui")
     entity_ui.drawCombatUI(p, screenX, screenY)
+end
+
+function player.drawHeroModel(x, y, r, g, b, p)
+    -- Scale factor based on player size (default was 20, now we scale based on actual size)
+    local scale = p.size / 20  -- Scale relative to original size of 20
+    
+    -- Define colors
+    local skinColor = {0.9, 0.7, 0.6}
+    local armorColor = {r, g, b}
+    local outlineColor = {0.3, 0.3, 0.3}
+    
+    -- Draw legs (behind body, scaled)
+    love.graphics.setColor(armorColor)
+    love.graphics.rectangle("fill", x - 3 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)  -- Left leg
+    love.graphics.rectangle("fill", x + 0.5 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)  -- Right leg
+    
+    -- Draw body/torso (scaled)
+    love.graphics.setColor(armorColor)
+    love.graphics.rectangle("fill", x - 4 * scale, y - 2 * scale, 8 * scale, 10 * scale)
+    
+    -- Draw arms (scaled)
+    love.graphics.setColor(skinColor)
+    love.graphics.rectangle("fill", x - 6 * scale, y - 1 * scale, 2 * scale, 6 * scale)  -- Left arm
+    love.graphics.rectangle("fill", x + 4 * scale, y - 1 * scale, 2 * scale, 6 * scale)  -- Right arm
+    
+    -- Draw head (scaled)
+    love.graphics.setColor(skinColor)
+    love.graphics.circle("fill", x, y - 6 * scale, 3 * scale)
+    
+    -- Draw simple face (scaled)
+    love.graphics.setColor(0, 0, 0)
+    love.graphics.circle("fill", x - 1 * scale, y - 6.5 * scale, 0.5 * scale)  -- Left eye
+    love.graphics.circle("fill", x + 1 * scale, y - 6.5 * scale, 0.5 * scale)  -- Right eye
+    
+    -- Draw held item if any
+    if p.selectedHotbarSlot then
+        local hotbarPanel = require("src.inventory").panelSystem.getPanel("hotbar")
+        if hotbarPanel and hotbarPanel.items[p.selectedHotbarSlot] then
+            local heldItem = hotbarPanel.items[p.selectedHotbarSlot]
+            player.drawHeldItem(x, y, heldItem, scale)
+        end
+    end
+    
+    -- Draw outlines for definition (scaled)
+    love.graphics.setColor(outlineColor)
+    love.graphics.setLineWidth(math.max(1, scale * 0.5))  -- Scale line width too
+    
+    -- Body outline
+    love.graphics.rectangle("line", x - 4 * scale, y - 2 * scale, 8 * scale, 10 * scale)
+    -- Head outline  
+    love.graphics.circle("line", x, y - 6 * scale, 3 * scale)
+    -- Arm outlines
+    love.graphics.rectangle("line", x - 6 * scale, y - 1 * scale, 2 * scale, 6 * scale)
+    love.graphics.rectangle("line", x + 4 * scale, y - 1 * scale, 2 * scale, 6 * scale)
+    -- Leg outlines
+    love.graphics.rectangle("line", x - 3 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)
+    love.graphics.rectangle("line", x + 0.5 * scale, y + 6 * scale, 2.5 * scale, 8 * scale)
+    
+    -- Reset line width
+    love.graphics.setLineWidth(1)
+end
+
+function player.drawHeldItem(x, y, item, scale)
+    if not item or not item.icon then
+        return
+    end
+    
+    scale = scale or 1  -- Default scale if not provided
+    
+    -- Draw item icon in right hand (scaled)
+    love.graphics.setColor(1, 1, 1)
+    local itemSize = 8 * scale
+    local handX = x + 5 * scale  -- Right hand position (scaled)
+    local handY = y + 1 * scale
+    
+    love.graphics.draw(item.icon, handX, handY, 0, itemSize/32, itemSize/32)
+end
+
+-- New function to pickup entire item piles
+function player.pickupItemPile(p, groundItems, inventory, pile)
+    if not pile or not pile.items then return end
+    
+    local inventory_module = require("src.inventory")
+    local ui = require("src.ui")
+    local itemsPickedUp = 0
+    local itemsAttempted = #pile.items
+    
+    -- Try to pick up all items in the pile (iterate backwards to avoid index issues)
+    for i = #pile.items, 1, -1 do
+        local groundItem = pile.items[i]
+        
+        -- Find the index of this item in the main groundItems array
+        for j = #groundItems, 1, -1 do
+            if groundItems[j] == groundItem then
+                if inventory_module.addItem(inventory, groundItem.item) then
+                    table.remove(groundItems, j)
+                    itemsPickedUp = itemsPickedUp + 1
+                end
+                break
+            end
+        end
+    end
+    
+    -- Show pickup message
+    if itemsPickedUp > 0 then
+        if itemsPickedUp == itemsAttempted then
+            if itemsPickedUp == 1 then
+                ui.addChatMessage("Picked up item", {0, 1, 0})
+            else
+                ui.addChatMessage("Picked up all " .. itemsPickedUp .. " items", {0, 1, 0})
+            end
+        else
+            ui.addChatMessage("Picked up " .. itemsPickedUp .. "/" .. itemsAttempted .. " items (inventory full)", {1, 1, 0})
+        end
+    else
+        ui.addChatMessage("Cannot pick up items - inventory full", {1, 0.5, 0.5})
+    end
 end
 
 -- Respawn player

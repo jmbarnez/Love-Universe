@@ -1,5 +1,6 @@
 local shield = {}
 local base = require("src.items.base")
+local ui = require("src.ui")
 
 local function createShieldIcon()
     return base.getCachedIcon("shield", function()

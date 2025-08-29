@@ -1,5 +1,6 @@
 local armor = {}
 local base = require("src.items.base")
+local ui = require("src.ui")
 
 local function createArmorIcon()
     return base.getCachedIcon("armor", function()

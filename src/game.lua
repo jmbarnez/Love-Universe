@@ -9,7 +9,7 @@ local chicken = require("src.enemies.chicken")
 local damage_effects = require("src.damage_effects")
 local inventory = require("src.inventory")
 local constants = require("src.constants")
-local context_menu = require("src.context_menu")
+
 local scroll = require("src.items.scroll")
 local gem = require("src.items.gem")
 local sword = require("src.items.sword")
@@ -45,13 +45,13 @@ local gameState = {
     -- Damage effects
     damageNumbers = {},
     -- Inventory
-    inventory = nil,
-    -- Context Menu
-    contextMenu = nil
+    inventory = nil
 }
 
 -- Initialize game
 function game.init()
+    -- Set up UI handlers to avoid circular dependencies
+    ui.handleGroundItemSelectionMenuClick = game.handleGroundItemSelectionMenuClick
     -- Use nearest filtering to prevent sub-pixel rendering issues
     love.graphics.setDefaultFilter("nearest", "nearest")
     love.graphics.setLineStyle("rough")
@@ -147,6 +147,11 @@ function game.init()
     -- Initialize UI system
     ui.init()
     
+    -- Update inventory constants for scaling
+    if inventory.panelSystem and inventory.panelSystem.updateLayout then
+        inventory.panelSystem.updateLayout()
+    end
+    
     -- Add startup messages to chat
     ui.addChatMessage("Welcome to Love2D RPG!", {0, 1, 0}) -- Green
     ui.addChatMessage("TAB: Inventory | C: Equipment | 1-0: Hotbar", {0.7, 0.7, 1}) -- Light blue
@@ -204,6 +209,16 @@ function game.update(dt)
     if gameState.inventory then
         inventory.update(dt)
     end
+
+    -- Update ground items (remove expired ones)
+    world.updateGroundItems(dt)
+    
+    
+    -- Update ground item hover state for tooltips
+    world.updateGroundItemHover(dt, gameState.mouse.worldX, gameState.mouse.worldY, gameState.groundItems)
+    
+    -- Update ground item selection menu
+    game.updateGroundItemSelectionMenu(dt)
 end
 
 -- Update chickens
@@ -360,44 +375,43 @@ function game.handleMousePress(x, y, button)
         return -- UI handled the click, don't process further
     end
     
-    -- Handle context menu clicks
-    if gameState.contextMenu then
-        local insideMenu = context_menu.isPointInside(gameState.contextMenu, x, y)
-        if not insideMenu then
-            -- Click outside menu - close it
-            gameState.contextMenu = nil
-            return
-        end
-        -- Menu handles its own clicks through SUIT
-        return
-    end
+
 
     -- Check if click is on any inventory panel (blocks world interaction)
     local isOverInventory, panelId, panel = inventory.isMouseOverInventory(x, y)
     if isOverInventory then
         -- Handle inventory panel interactions
-        if panel and panel.slotAt then
-            local slotIndex = panel:slotAt(x, y)
+        if panel then
+            -- For inventory panel, use the override method
+            local slotIndex
+            if panelId == "inventory" then
+                slotIndex = inventory.slotAt(panel, x, y)
+            elseif panel.slotAt then
+                slotIndex = panel:slotAt(x, y)
+            end
+
             if slotIndex and panel.items and panel.items[slotIndex] then
                 local mods = {
                     lctrl = love.keyboard.isDown("lctrl"),
                     rctrl = love.keyboard.isDown("rctrl")
                 }
-                
+
                 if button == 1 then
-                    inventory.startDrag(panel, slotIndex, x, y, mods.lctrl or mods.rctrl, panelId)
-                elseif button == 2 then
-                    inventory.showContextMenu(panel, slotIndex, x, y)
+                    -- Start drag operation
+                    local success = inventory.startDrag(panel, slotIndex, x, y, mods.lctrl or mods.rctrl, panelId)
+                    if success then
+                        return -- Block world interaction
+                    end
                 end
             end
         end
-        return -- Block world interaction
+        return -- Block world interaction even if no item was clicked
     end
 
     if button == 1 then -- Left-click
         local worldX, worldY = gameState.camera:worldCoords(x, y)
         local clickedChicken, _, _ = game.getChickenAtPosition(worldX, worldY)
-        local clickedItem, itemIndex = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
+        local clickedItem, itemIndex, pile = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
 
         if clickedChicken then
             gameState.movementTarget = {
@@ -412,35 +426,20 @@ function game.handleMousePress(x, y, button)
                 tileY = math.floor(clickedChicken.worldY / constants.TILE_SIZE) + 1
             }
         elseif clickedItem then
-            player.pickupItem(gameState.player, gameState.groundItems, gameState.inventory, itemIndex)
+            player.pickupItemPile(gameState.player, gameState.groundItems, gameState.inventory, pile or {{item = clickedItem, index = itemIndex}})
         else
             gameState.movementTarget = {x = worldX, y = worldY}
         end
     elseif button == 2 then -- Right-click
         local worldX, worldY = gameState.camera:worldCoords(x, y)
-        local clickedChicken, _, _ = game.getChickenAtPosition(worldX, worldY)
-        local clickedItem, itemIndex = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
-
-        if clickedChicken then
-            gameState.contextMenu = context_menu.create(x, y, {
-                {text = "Attack", action = function() 
-                    gameState.movementTarget = {
-                        x = clickedChicken.worldX,
-                        y = clickedChicken.worldY,
-                        isAttackTarget = true,
-                        targetEntity = clickedChicken
-                    }
-                    gameState.playerTarget = {
-                        entity = clickedChicken,
-                        tileX = math.floor(clickedChicken.worldX / constants.TILE_SIZE) + 1,
-                        tileY = math.floor(clickedChicken.worldY / constants.TILE_SIZE) + 1
-                    }
-                end}
-            })
+        local clickedItem, itemIndex, pile = world.getGroundItemAtPosition(worldX, worldY, gameState.groundItems)
+        
+        if clickedItem and pile and #pile.items > 1 then
+            -- Multiple items stacked - show selection menu
+            game.showGroundItemSelectionMenu(pile, x, y)
         elseif clickedItem then
-            gameState.contextMenu = context_menu.create(x, y, {
-                {text = "Pickup", action = function() player.pickupItem(gameState.player, gameState.groundItems, gameState.inventory, itemIndex) end}
-            })
+            -- Single item - also show context menu (right-click should never pickup directly)
+            game.showGroundItemSelectionMenu(pile or {items = {{item = clickedItem, index = itemIndex}}}, x, y)
         end
     end
 end
@@ -452,6 +451,20 @@ function game.handleMouseRelease(x, y, button)
     -- Handle drag completion
     if button == 1 then
         inventory.finishDrag(x, y)
+    end
+end
+
+-- Handle mouse movement
+function game.handleMouseMove(x, y, dx, dy, istouch)
+    -- Update mouse world position
+    if gameState.camera then
+        gameState.mouse.worldX, gameState.mouse.worldY = gameState.camera:worldCoords(x, y)
+    end
+
+    -- Update drag target if dragging
+    local currentDragState = inventory.getDragState()
+    if currentDragState and currentDragState.active then
+        inventory.updateDragTarget(x, y)
     end
 end
 
@@ -491,15 +504,36 @@ function game.handleKeyPress(key)
             equipmentPanel.visible = not equipmentPanel.visible
         end
     elseif key >= "1" and key <= "9" or key == "0" then
-        -- Hotbar shortcuts (1-9, 0)
+        -- Hotbar shortcuts (1-9, 0) - select item instead of using it
         local hotbarIndex = key == "0" and 10 or tonumber(key)
         local hotbarPanel = inventory.panelSystem.getPanel("hotbar")
         if hotbarPanel then
             local item = hotbarPanel.items[hotbarIndex]
-            if item and item.onUse then
-                item.onUse(gameState.player, item)
-                ui.addChatMessage("Used: " .. (item.name or "Unknown Item"), {0, 1, 0})
+            if item then
+                -- Select this hotbar slot
+                gameState.player.selectedHotbarSlot = hotbarIndex
+                ui.addChatMessage("Selected: " .. (item.name or "Unknown Item"), {0.8, 0.8, 1})
+            else
+                -- Deselect if slot is empty
+                gameState.player.selectedHotbarSlot = nil
+                ui.addChatMessage("Deselected item", {0.7, 0.7, 0.7})
             end
+        end
+    elseif key == "space" then
+        -- Use currently selected hotbar item
+        if gameState.player.selectedHotbarSlot then
+            local hotbarPanel = inventory.panelSystem.getPanel("hotbar")
+            if hotbarPanel then
+                local item = hotbarPanel.items[gameState.player.selectedHotbarSlot]
+                if item and item.onUse then
+                    item.onUse(gameState.player, item)
+                    ui.addChatMessage("Used: " .. (item.name or "Unknown Item"), {0, 1, 0})
+                else
+                    ui.addChatMessage("Cannot use this item", {1, 0.5, 0.5})
+                end
+            end
+        else
+            ui.addChatMessage("No item selected", {0.7, 0.7, 0.7})
         end
     elseif key == "f11" then
         -- Toggle between windowed and fullscreen
@@ -523,11 +557,17 @@ function game.handleKeyPress(key)
         -- Increase UI scale
         game.setUIScale(constants.DISPLAY_CONFIG.uiScale + 0.1)
         constants.updateUIScale()
+        if ui and ui.updateLayout then
+            ui.updateLayout()
+        end
         ui.addChatMessage("UI Scale: " .. string.format("%.1f", constants.DISPLAY_CONFIG.uiScale), {1, 1, 0})
     elseif key == "kp-" or key == "-" then
         -- Decrease UI scale
         game.setUIScale(constants.DISPLAY_CONFIG.uiScale - 0.1)
         constants.updateUIScale()
+        if ui and ui.updateLayout then
+            ui.updateLayout()
+        end
         ui.addChatMessage("UI Scale: " .. string.format("%.1f", constants.DISPLAY_CONFIG.uiScale), {1, 1, 0})
     end
 end
@@ -554,8 +594,17 @@ function game.draw()
 
     -- Draw ground items
     world.drawGroundItems(gameState.groundItems, gameState.camera)
+    
+    
+    -- Draw ground item interaction outlines
+    local interactionOutline = require("src.interaction_outline")
+    world.drawGroundItemOutlines(gameState.groundItems, gameState.mouse.worldX, gameState.mouse.worldY, interactionOutline)
+    
 
     gameState.camera:unset()
+    
+    -- Draw ground item tooltips (after camera is unset, so they're in screen space)
+    world.drawGroundItemTooltip(gameState.camera)
 
 
     -- Draw interaction prompts for chickens
@@ -589,11 +638,13 @@ function game.draw()
     -- Draw drag ghost (must be drawn after panels to appear on top)
     inventory.drawDragGhost()
 
-    -- Draw context menu
-    context_menu.draw(gameState.contextMenu)
+
     
     -- Draw enhanced UI system
     ui.draw()
+    
+    -- Draw ground item selection menu (after UI)
+    game.drawGroundItemSelectionMenu()
     
     -- Debug messages now handled by chat window
 end
@@ -921,6 +972,157 @@ function game.onWindowResize(width, height)
     constants.GAME_WIDTH = width
     constants.GAME_HEIGHT = height
     constants.updateUIScale()
+    
+    -- Update UI layout after scaling changes
+    if ui and ui.updateLayout then
+        ui.updateLayout()
+    end
+end
+
+-- Ground item selection system
+local groundItemSelectionMenu = nil
+
+function game.showGroundItemSelectionMenu(pile, screenX, screenY)
+    if not pile or not pile.items or #pile.items < 1 then
+        return
+    end
+    
+    groundItemSelectionMenu = {
+        pile = pile,
+        screenX = screenX,
+        screenY = screenY,
+        createdTime = love.timer.getTime()
+    }
+end
+
+function game.updateGroundItemSelectionMenu(dt)
+    if groundItemSelectionMenu then
+        -- Auto-close menu after 5 seconds
+        if love.timer.getTime() - groundItemSelectionMenu.createdTime > 5.0 then
+            groundItemSelectionMenu = nil
+        end
+    end
+end
+
+function game.drawGroundItemSelectionMenu()
+    if not groundItemSelectionMenu then
+        return
+    end
+    
+    local menu = groundItemSelectionMenu
+    local itemHeight = 25
+    local menuWidth = 250  -- Increased width to accommodate "Pickup [item name]" text
+    local menuHeight = #menu.pile.items * itemHeight + 10
+    
+    -- Position menu near mouse but keep on screen
+    local menuX = menu.screenX + 10
+    local menuY = menu.screenY - menuHeight / 2
+    
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+    
+    if menuX + menuWidth > screenWidth then
+        menuX = menu.screenX - menuWidth - 10
+    end
+    if menuY < 0 then
+        menuY = 10
+    elseif menuY + menuHeight > screenHeight then
+        menuY = screenHeight - menuHeight - 10
+    end
+    
+    -- Draw menu background
+    love.graphics.setColor(0.1, 0.1, 0.1, 0.9)
+    love.graphics.rectangle("fill", menuX, menuY, menuWidth, menuHeight)
+    
+    -- Draw menu border
+    love.graphics.setColor(0.5, 0.5, 0.5, 1)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("line", menuX, menuY, menuWidth, menuHeight)
+    love.graphics.setLineWidth(1)
+    
+    -- Draw items
+    local mouseX, mouseY = love.mouse.getPosition()
+    for i, groundItem in ipairs(menu.pile.items) do
+        local itemY = menuY + 5 + (i - 1) * itemHeight
+        local isHovered = mouseX >= menuX and mouseX <= menuX + menuWidth and
+                         mouseY >= itemY and mouseY <= itemY + itemHeight
+        
+        -- Highlight hovered item
+        if isHovered then
+            love.graphics.setColor(0.3, 0.3, 0.3, 1)
+            love.graphics.rectangle("fill", menuX, itemY, menuWidth, itemHeight)
+        end
+        
+        -- Draw item icon if available
+        if groundItem.item.icon then
+            love.graphics.setColor(1, 1, 1)
+            love.graphics.draw(groundItem.item.icon, menuX + 5, itemY + 2, 0, 0.6, 0.6)
+        end
+        
+        -- Draw action text with item name and count
+        love.graphics.setColor(1, 1, 1)
+        local itemName = groundItem.item.name or "Unknown Item"
+        if groundItem.item.count and groundItem.item.count > 1 then
+            itemName = itemName .. " x" .. groundItem.item.count
+        end
+        local actionText = "Pickup " .. itemName
+        love.graphics.print(actionText, menuX + 25, itemY + 5)
+        
+    end
+end
+
+function game.handleGroundItemSelectionMenuClick(x, y, button)
+    if not groundItemSelectionMenu then
+        return false
+    end
+    
+    
+    -- When menu is open, consume ALL clicks (don't let any pass through to world)
+    if button ~= 1 then
+        return true -- Block non-left clicks but don't do anything
+    end
+    
+    local menu = groundItemSelectionMenu
+    local itemHeight = 25
+    local menuWidth = 250  -- Increased width to accommodate "Pickup [item name]" text
+    local menuHeight = #menu.pile.items * itemHeight + 10
+    
+    -- Position menu near mouse but keep on screen
+    local menuX = menu.screenX + 10
+    local menuY = menu.screenY - menuHeight / 2
+    
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+    
+    if menuX + menuWidth > screenWidth then
+        menuX = menu.screenX - menuWidth - 10
+    end
+    if menuY < 0 then
+        menuY = 10
+    elseif menuY + menuHeight > screenHeight then
+        menuY = screenHeight - menuHeight - 10
+    end
+    
+    -- Check if click is within menu bounds
+    if x >= menuX and x <= menuX + menuWidth and
+       y >= menuY and y <= menuY + menuHeight then
+        
+        -- Check which item was clicked
+        for i, groundItem in ipairs(menu.pile.items) do
+            local itemY = menuY + 5 + (i - 1) * itemHeight
+            if y >= itemY and y <= itemY + itemHeight then
+                player.pickupItemPile(gameState.player, gameState.groundItems, gameState.inventory, {items = {groundItem}})
+                groundItemSelectionMenu = nil
+                return true -- Consumed the click
+            end
+        end
+        -- Click was in menu area but not on an item - just consume the click
+        return true 
+    else
+        -- Click outside menu - close it but still consume the click to prevent world interaction
+        groundItemSelectionMenu = nil
+        return true -- Block the click from reaching the world
+    end
 end
 
 return game

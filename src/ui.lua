@@ -17,20 +17,51 @@ local uiState = {
         messages = {},
         visible = true,
         maxMessages = 50,
-        x = 10 * constants.UI_SCALE,
+        x = 0, -- Will be set dynamically
         y = 0, -- Will be set dynamically
-        width = 400 * constants.UI_SCALE,
-        height = 150 * constants.UI_SCALE
+        width = 0, -- Will be set dynamically
+        height = 0 -- Will be set dynamically
     }
 }
+
+-- Create consistent fonts for UI text that's not affected by scaling
+local barFont = love.graphics.newFont(10)
+local titleFont = love.graphics.newFont(14)
+local dialogFont = love.graphics.newFont(12)
+local chatFont = love.graphics.newFont(11)
+local smallFont = love.graphics.newFont(9)
 
 -- Initialize UI system
 function ui.init()
     -- Create custom theme
     ui.createTheme()
     
-    -- Position chat window at bottom left
-    uiState.chatWindow.y = love.graphics.getHeight() - uiState.chatWindow.height - 10 * constants.UI_SCALE
+    -- Update UI positions based on current scaling
+    ui.updateLayout()
+end
+
+-- Update UI layout based on current screen size and scaling
+function ui.updateLayout()
+    -- Update chat window dimensions and position
+    uiState.chatWindow.x = constants.INVENTORY_MARGIN or math.floor(10 * constants.UI_SCALE)
+    uiState.chatWindow.width = constants.CHAT_WIDTH or math.floor(400 * constants.UI_SCALE)
+    uiState.chatWindow.height = constants.CHAT_HEIGHT or math.floor(150 * constants.UI_SCALE)
+    uiState.chatWindow.y = love.graphics.getHeight() - uiState.chatWindow.height - (constants.CHAT_BOTTOM_MARGIN or math.floor(10 * constants.UI_SCALE))
+    
+    -- Update any other UI elements that need repositioning
+    for _, window in pairs(uiState.windows) do
+        if window.relativePosition then
+            -- If window has relative positioning, update it
+            window.x = window.relativePosition.x * love.graphics.getWidth()
+            window.y = window.relativePosition.y * love.graphics.getHeight()
+        end
+    end
+    
+    -- Update inventory panels if they exist
+    local inventory = require("src.inventory")
+    if inventory and inventory.panelSystem and inventory.panelSystem.updateLayout then
+        inventory.panelSystem.updateLayout()
+    end
 end
 
 -- Create a custom theme for the RPG
@@ -49,9 +80,9 @@ function ui.createTheme()
         mana = {0.2, 0.4, 0.8, 1.0},
         stamina = {0.2, 0.8, 0.2, 1.0}
     }
-    
+
     uiState.theme.colors = colors
-    
+
     -- Override SUIT theme
     suit.theme.Button = function(arg, opt, x, y, w, h)
         local color = colors.button
@@ -77,11 +108,11 @@ function ui.createTheme()
         local font = love.graphics.getFont()
         love.graphics.printf(opt.text or "", x, y + (h - font:getHeight()) / 2, w, "center")
     end
-    
+
     suit.theme.Input = function(arg, opt, x, y, w, h)
         local bg_color = colors.panel
         local border_color = colors.border
-        
+
         if arg.focused then
             border_color = colors.accent
         end
@@ -104,6 +135,28 @@ function ui.createTheme()
             text = text .. "|"
         end
         love.graphics.printf(text, x + 8, y + (h - font:getHeight()) / 2, w - 16, "left")
+    end
+end
+
+-- Get theme colors (safe getter for external access)
+function ui.getThemeColors()
+    if uiState.theme and uiState.theme.colors then
+        return uiState.theme.colors
+    else
+        -- Fallback colors if theme not initialized
+        return {
+            background = {0.08, 0.08, 0.12, 0.95},
+            panel = {0.12, 0.12, 0.18, 0.9},
+            border = {0.4, 0.3, 0.2, 1.0},
+            text = {0.9, 0.85, 0.8, 1.0},
+            accent = {0.6, 0.4, 0.2, 1.0},
+            button = {0.25, 0.2, 0.15, 1.0},
+            button_hover = {0.35, 0.25, 0.18, 1.0},
+            button_active = {0.15, 0.12, 0.1, 1.0},
+            health = {0.8, 0.2, 0.2, 1.0},
+            mana = {0.2, 0.4, 0.8, 1.0},
+            stamina = {0.2, 0.8, 0.2, 1.0}
+        }
     end
 end
 
@@ -152,7 +205,8 @@ function ui.drawWindow(window)
     
     -- Title text
     love.graphics.setColor(colors.text)
-    love.graphics.printf(window.title, x, y + (titleHeight - 16) / 2, w, "center")
+    love.graphics.setFont(titleFont)
+    love.graphics.printf(window.title, x, y + (titleHeight - titleFont:getHeight()) / 2, w, "center")
     
     -- Draw window content
     if window.content_func then
@@ -181,29 +235,35 @@ function ui.drawBar(x, y, w, h, current, max, label, barType, options)
     local segments = options.segments or 10
     local animate = options.animate ~= false  -- Default to true
 
-    -- Animation state (smooth value lerping)
-    local animKey = string.format("%s_%s", barType, label or "default")
-    if not uiState.barAnimations then uiState.barAnimations = {} end
-    if not uiState.barAnimations[animKey] then
-        uiState.barAnimations[animKey] = { current = percentage, target = percentage, velocity = 0 }
+    -- For instant updates (like health bars), skip animation to show immediate changes
+    local displayPercentage = percentage
+
+    -- Animation state (smooth value lerping) - only for non-critical bars
+    local anim = nil
+    if animate and barType ~= "health" then
+        local animKey = string.format("%s_%s", barType, label or "default")
+        if not uiState.barAnimations then uiState.barAnimations = {} end
+        if not uiState.barAnimations[animKey] then
+            uiState.barAnimations[animKey] = { current = percentage, target = percentage, velocity = 0 }
+        end
+
+        anim = uiState.barAnimations[animKey]
+        anim.target = percentage
+
+        -- Smooth animation towards target
+        if anim.current ~= anim.target then
+            local dt = love.timer.getDelta()
+            local diff = anim.target - anim.current
+            anim.velocity = anim.velocity + diff * dt * 8  -- Spring-like acceleration
+            anim.velocity = anim.velocity * 0.8  -- Damping
+            anim.current = anim.current + anim.velocity * dt
+            anim.current = lume.clamp(anim.current, 0, 1)
+        else
+            anim.current = anim.target
+        end
+
+        displayPercentage = anim.current
     end
-
-    local anim = uiState.barAnimations[animKey]
-    anim.target = percentage
-
-    -- Smooth animation towards target
-    if animate and anim.current ~= anim.target then
-        local dt = love.timer.getDelta()
-        local diff = anim.target - anim.current
-        anim.velocity = anim.velocity + diff * dt * 8  -- Spring-like acceleration
-        anim.velocity = anim.velocity * 0.8  -- Damping
-        anim.current = anim.current + anim.velocity * dt
-        anim.current = lume.clamp(anim.current, 0, 1)
-    else
-        anim.current = anim.target
-    end
-
-    local displayPercentage = anim.current
 
     -- Draw background with rounded corners
     love.graphics.setColor(0.15, 0.15, 0.15, 0.9)
@@ -227,8 +287,8 @@ function ui.drawBar(x, y, w, h, current, max, label, barType, options)
         end
     end
 
-    -- Draw damage/heal highlights
-    if options.showHighlights and anim.velocity ~= 0 then
+    -- Draw damage/heal highlights (only for animated bars)
+    if options.showHighlights and animate and barType ~= "health" and anim and anim.velocity ~= 0 then
         local highlightAlpha = math.abs(anim.velocity) * 2
         if anim.velocity > 0 then
             -- Healing highlight (green)
@@ -248,8 +308,10 @@ function ui.drawBar(x, y, w, h, current, max, label, barType, options)
     -- Draw text
     if label then
         love.graphics.setColor(colors.text)
+        love.graphics.setFont(barFont)
         local text = string.format("%s: %d/%d", label, current, max)
-        love.graphics.printf(text, x, y + (h - 14) / 2, w, "center")
+        local textHeight = barFont:getHeight()
+        love.graphics.printf(text, x, y + (h - textHeight) / 2, w, "center")
     end
 end
 
@@ -334,23 +396,23 @@ function ui.drawTooltip()
     if not tooltip or tooltip.timer > 0 then return end
     
     local colors = uiState.theme.colors
-    local font = love.graphics.getFont()
+    love.graphics.setFont(dialogFont)
     local text = tooltip.text
-    local w = font:getWidth(text) + 16
-    local h = font:getHeight() + 8
-    
+    local w = dialogFont:getWidth(text) + 16
+    local h = dialogFont:getHeight() + 8
+
     -- Keep tooltip on screen
     local x = lume.clamp(tooltip.x, 0, love.graphics.getWidth() - w)
     local y = lume.clamp(tooltip.y - h - 10, 0, love.graphics.getHeight() - h)
-    
+
     -- Background
     love.graphics.setColor(colors.panel)
     love.graphics.rectangle("fill", x, y, w, h)
-    
+
     -- Border
     love.graphics.setColor(colors.border)
     love.graphics.rectangle("line", x, y, w, h)
-    
+
     -- Text
     love.graphics.setColor(colors.text)
     love.graphics.print(text, x + 8, y + 4)
@@ -377,7 +439,9 @@ function ui.drawInventorySlot(x, y, w, h, item, index, selected)
         
         -- Item count
         if item.count and item.count > 1 then
-            love.graphics.printf(tostring(item.count), x, y + h - 16, w, "right")
+            love.graphics.setFont(smallFont)
+            love.graphics.setColor(colors.text)
+            love.graphics.printf(tostring(item.count), x, y + h - smallFont:getHeight() - 2, w, "right")
         end
     end
 end
@@ -402,10 +466,15 @@ function ui.drawConfirmDialog()
     local screenHeight = love.graphics.getHeight()
 
     -- Dialog dimensions
-    local dialogWidth = 300 * constants.UI_SCALE
-    local dialogHeight = 120 * constants.UI_SCALE
+    local dialogWidth = constants.DIALOG_WIDTH or math.floor(300 * constants.UI_SCALE)
+    local dialogHeight = constants.DIALOG_HEIGHT or math.floor(120 * constants.UI_SCALE)
     local dialogX = (screenWidth - dialogWidth) / 2
     local dialogY = (screenHeight - dialogHeight) / 2
+
+    -- Ensure dialog stays within screen bounds with proper margins
+    local margin = constants.INVENTORY_MARGIN or math.floor(10 * constants.UI_SCALE)
+    dialogX = math.max(margin, math.min(dialogX, screenWidth - dialogWidth - margin))
+    dialogY = math.max(margin, math.min(dialogY, screenHeight - dialogHeight - margin))
 
     -- Draw dialog background
     love.graphics.setColor(colors.background)
@@ -419,14 +488,17 @@ function ui.drawConfirmDialog()
 
     -- Draw title
     love.graphics.setColor(colors.text)
-    local titleWidth = love.graphics.getFont():getWidth(dialog.title)
+    love.graphics.setFont(dialogFont)
+    local titleWidth = dialogFont:getWidth(dialog.title)
     love.graphics.print(dialog.title, dialogX + (dialogWidth - titleWidth) / 2, dialogY + 10)
 
     -- Draw message
     love.graphics.setColor(colors.text)
+    love.graphics.setFont(dialogFont)
     local messageY = dialogY + 35
     local messageLines = {}
     local lineWidth = dialogWidth - 20
+    local lineHeight = dialogFont:getHeight() + 2
     local words = {}
     for word in dialog.message:gmatch("%S+") do
         table.insert(words, word)
@@ -435,7 +507,7 @@ function ui.drawConfirmDialog()
     local currentLine = ""
     for _, word in ipairs(words) do
         local testLine = currentLine .. (currentLine == "" and "" or " ") .. word
-        if love.graphics.getFont():getWidth(testLine) > lineWidth then
+        if dialogFont:getWidth(testLine) > lineWidth then
             table.insert(messageLines, currentLine)
             currentLine = word
         else
@@ -447,7 +519,7 @@ function ui.drawConfirmDialog()
     end
 
     for i, line in ipairs(messageLines) do
-        love.graphics.print(line, dialogX + 10, messageY + (i-1) * 16)
+        love.graphics.print(line, dialogX + 10, messageY + (i-1) * lineHeight)
     end
 
     -- Draw buttons
@@ -564,20 +636,21 @@ function ui.drawChatWindow()
     love.graphics.setColor(colors.panel[1], colors.panel[2], colors.panel[3], 0.8)
     love.graphics.rectangle("fill", chat.x, chat.y, chat.width, 20)
     love.graphics.setColor(colors.text)
+    love.graphics.setFont(chatFont)
     love.graphics.print("Console", chat.x + 5, chat.y + 3)
     
     -- Messages
-    local font = love.graphics.getFont()
-    local lineHeight = font:getHeight() + 2
+    love.graphics.setFont(chatFont)
+    local lineHeight = chatFont:getHeight() + 2
     local startY = chat.y + 25
     local visibleLines = math.floor((chat.height - 30) / lineHeight)
-    
+
     -- Draw messages from bottom to top (newest at bottom)
     local startIndex = math.max(1, #chat.messages - visibleLines + 1)
     for i = startIndex, #chat.messages do
         local msg = chat.messages[i]
         local y = startY + (i - startIndex) * lineHeight
-        
+
         love.graphics.setColor(msg.color)
         love.graphics.print(msg.text, chat.x + 5, y)
     end
@@ -623,7 +696,30 @@ function ui.mousepressed(x, y, button)
     suit.mousepressed(x, y, button)
     
     -- Check if the click was over any UI element
-    -- For now, we'll check if the chat window is visible and was clicked
+    -- Check ground item selection menu first (avoid circular dependency by checking directly)
+    if ui.handleGroundItemSelectionMenuClick and ui.handleGroundItemSelectionMenuClick(x, y, button) then
+        return true -- Selection menu consumed the click
+    end
+    
+    -- Check all windows
+    for windowId, window in pairs(uiState.windows) do
+        if window.visible then
+            local winX = window.x or 0
+            local winY = window.y or 0  
+            local winW = window.w or 0
+            local winH = window.h or 0
+            if x >= winX and x <= winX + winW and
+               y >= winY and y <= winY + winH then
+                -- Handle window-specific click events
+                if window.onClick then
+                    window.onClick(x - winX, y - winY, button)
+                end
+                return true -- UI consumed the click
+            end
+        end
+    end
+    
+    -- Check if the chat window is visible and was clicked
     if uiState.chatWindow.visible then
         local chatX = uiState.chatWindow.x
         local chatY = uiState.chatWindow.y
@@ -638,6 +734,9 @@ function ui.mousepressed(x, y, button)
     
     return false -- UI did not consume the click
 end
+
+-- Ground item selection menu handling (set by game module to avoid circular dependencies)
+ui.handleGroundItemSelectionMenuClick = nil
 
 function ui.mousereleased(x, y, button)
     suit.mousereleased(x, y, button)

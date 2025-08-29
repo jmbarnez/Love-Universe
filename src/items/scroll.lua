@@ -1,4 +1,5 @@
 local scroll = {}
+local ui = require("src.ui")
 
 -- Icon cache to avoid recreating the same icons
 local iconCache = {}

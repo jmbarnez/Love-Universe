@@ -6,6 +6,9 @@ local constants = require("src.constants")
 local ui = require("src.ui")
 local lume = require("lib.lume")
 
+-- Create a consistent font for HUD text that's not affected by UI scaling
+local hudFont = love.graphics.newFont(12)
+
 
 
 -- Draw enhanced HUD with new UI system
@@ -26,7 +29,8 @@ function hud.draw(player, gameState)
 
     -- Show inventory toggle hint (bottom left)
     love.graphics.setColor(1, 1, 1, 0.7)
-    love.graphics.print("Press TAB for Inventory", constants.HUD_MARGIN_X, love.graphics.getHeight() - 25 * constants.UI_SCALE)
+    love.graphics.setFont(hudFont)
+    love.graphics.print("Press TAB for Inventory", constants.HUD_MARGIN_X, love.graphics.getHeight() - constants.INVENTORY_HINT_Y_OFFSET)
 
     -- Draw enemy tooltip (top center)
     local tooltipTarget = hud.getTooltipTarget(gameState)
@@ -78,69 +82,63 @@ function hud.drawEnemyTooltip(enemy)
 
     local screenWidth = love.graphics.getWidth()
     local screenHeight = love.graphics.getHeight()
+    local colors = ui.getThemeColors()
 
     -- Tooltip dimensions (scaled)
-    local tooltipWidth = 250 * constants.UI_SCALE
-    local tooltipHeight = 60 * constants.UI_SCALE
+    local tooltipWidth = constants.TOOLTIP_WIDTH or math.floor(250 * constants.UI_SCALE)
+    local tooltipHeight = constants.TOOLTIP_HEIGHT or math.floor(60 * constants.UI_SCALE)
     local tooltipX = (screenWidth - tooltipWidth) / 2
-    local tooltipY = 20 * constants.UI_SCALE
+    local tooltipY = constants.TOOLTIP_Y_OFFSET
+    local cornerRadius = 6
 
-    -- Tooltip background
-    love.graphics.setColor(0, 0, 0, 0.8)
-    love.graphics.rectangle("fill", tooltipX - 2, tooltipY - 2, tooltipWidth + 4, tooltipHeight + 4)
+    -- Draw tooltip shadow
+    love.graphics.setColor(0, 0, 0, 0.3)
+    ui.drawRoundedRect(tooltipX + 3, tooltipY + 3, tooltipWidth, tooltipHeight, cornerRadius)
 
-    love.graphics.setColor(0.2, 0.2, 0.2, 0.9)
-    love.graphics.rectangle("fill", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
+    -- Tooltip background using theme colors
+    love.graphics.setColor(colors.panel)
+    ui.drawRoundedRect(tooltipX, tooltipY, tooltipWidth, tooltipHeight, cornerRadius)
+
+    -- Inner shadow for depth
+    love.graphics.setColor(0, 0, 0, 0.2)
+    ui.drawRoundedRect(tooltipX + 2, tooltipY + 2, tooltipWidth - 4, tooltipHeight - 4, cornerRadius * 0.7)
 
     -- Tooltip border
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.rectangle("line", tooltipX, tooltipY, tooltipWidth, tooltipHeight)
+    love.graphics.setColor(colors.border)
+    love.graphics.setLineWidth(2)
+    ui.drawRoundedRectOutline(tooltipX, tooltipY, tooltipWidth, tooltipHeight, cornerRadius)
+    love.graphics.setLineWidth(1)
 
     -- Enemy name and level
     local nameText = enemy.name .. " (Level " .. enemy.level .. ")"
-    love.graphics.setColor(1, 1, 1, 1)
-    local font = love.graphics.getFont()
-    local nameWidth = font:getWidth(nameText)
+    love.graphics.setColor(colors.text)
+    love.graphics.setFont(hudFont)
+    local nameWidth = hudFont:getWidth(nameText)
     local nameX = tooltipX + (tooltipWidth - nameWidth) / 2
-    love.graphics.print(nameText, nameX, tooltipY + 8)
+    love.graphics.print(nameText, nameX, tooltipY + 10)
 
-    -- Health bar (scaled)
-    local barWidth = 200 * constants.UI_SCALE
-    local barHeight = 12 * constants.UI_SCALE
+    -- Health bar using enhanced UI system
+    local barWidth = math.floor(200 * constants.UI_SCALE)
+    local barHeight = math.floor(12 * constants.UI_SCALE)
     local barX = tooltipX + (tooltipWidth - barWidth) / 2
-    local barY = tooltipY + 30 * constants.UI_SCALE
+    local barY = tooltipY + constants.HEALTH_BAR_Y_OFFSET
 
-    -- Health bar background
-    love.graphics.setColor(0.3, 0.3, 0.3, 0.8)
-    love.graphics.rectangle("fill", barX, barY, barWidth, barHeight)
-
-    -- Health bar fill
     local currentHealth = enemy.alive and enemy.health or 0
     local healthPercent = currentHealth / enemy.maxHealth
-    local healthColor = {0, 1, 0} -- Green
-    if not enemy.alive then
-        healthColor = {0.5, 0.5, 0.5} -- Gray when dead
-    elseif healthPercent < 0.3 then
-        healthColor = {1, 0, 0} -- Red when low
-    elseif healthPercent < 0.6 then
-        healthColor = {1, 1, 0} -- Yellow when medium
-    end
 
-    love.graphics.setColor(healthColor[1], healthColor[2], healthColor[3], 0.9)
-    love.graphics.rectangle("fill", barX, barY, barWidth * healthPercent, barHeight)
+    -- Use the enhanced bar system for health
+    ui.drawBar(barX, barY, barWidth, barHeight, currentHealth, enemy.maxHealth, nil, "health",
+               {cornerRadius = 4, segments = 5, animate = false})
 
-    -- Health bar border
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.rectangle("line", barX, barY, barWidth, barHeight)
-
-    -- Health text
+    -- Health text overlay
     local healthText = currentHealth .. "/" .. enemy.maxHealth
     if not enemy.alive then
         healthText = "DEAD"
     end
-    love.graphics.setColor(1, 1, 1, 1)
-    local healthTextWidth = font:getWidth(healthText)
-    love.graphics.print(healthText, barX + (barWidth - healthTextWidth) / 2, barY + barHeight + 2)
+    love.graphics.setColor(colors.text)
+    love.graphics.setFont(hudFont)
+    local healthTextWidth = hudFont:getWidth(healthText)
+    love.graphics.print(healthText, barX + (barWidth - healthTextWidth) / 2, barY + barHeight + 4)
 
     -- Reset color
     love.graphics.setColor(1, 1, 1, 1)

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(love:*)",
+      "Bash(lua:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

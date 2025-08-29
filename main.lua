@@ -93,6 +93,11 @@ end
 function love.mousemoved(x, y, dx, dy, istouch)
     -- Handle inventory mouse movement through game module
     inventory.updateDragTarget(x, y)
+
+    -- Also handle game mouse movement
+    if game and game.handleMouseMove then
+        game.handleMouseMove(x, y, dx, dy, istouch)
+    end
 end
 
 function love.textinput(text)

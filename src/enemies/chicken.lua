@@ -7,7 +7,7 @@ local combat = require("src.combat")
 local lume = require("lib.lume")
 
 -- Chicken properties
-local CHICKEN_SIZE = 16 -- Small size for cute chickens
+local CHICKEN_SIZE = 8 -- Half size for proper scaling with larger player
 local CHICKEN_COLOR = {1.0, 1.0, 1.0} -- White color for cute chickens
 local CHICKEN_OUTLINE_COLOR = {0.8, 0.8, 0.8} -- Light gray outline
 local CHICKEN_HEALTH = 3 -- Reduced to 3 HP like RuneScape
@@ -33,7 +33,8 @@ function chicken.create(worldX, worldY)
         name = "Chicken",
         level = 1,
         lootTable = {
-            {item = "feather", min = 1, max = 2, chance = 1.0}
+            {item = "feather", min = 1, max = 2, chance = 1.0},
+            {item = "chicken_skull", min = 1, max = 1, chance = 1.0} -- Guaranteed drop
         }
     }
 
@@ -60,7 +61,8 @@ function chicken.die(chick)
     chick.alive = false
     local world = require("src.world")
     local item_definitions = {
-        feather = require("src.items.feather")
+        feather = require("src.items.feather"),
+        chicken_skull = require("src.items.chicken_skull")
     }
 
     for _, drop in ipairs(chick.lootTable) do

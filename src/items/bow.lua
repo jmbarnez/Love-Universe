@@ -1,5 +1,6 @@
 local bow = {}
 local base = require("src.items.base")
+local ui = require("src.ui")
 
 local function createBowIcon()
     return base.getCachedIcon("bow", function()

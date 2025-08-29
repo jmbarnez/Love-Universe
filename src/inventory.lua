@@ -7,12 +7,27 @@ local ui = require("src.ui")
 local suit = require("lib.suit")
 
 -- Inventory constants (scaled)
-local SLOT_SIZE = 40 * constants.UI_SCALE
-local SLOT_PADDING = 2 * constants.UI_SCALE
 local SLOT_ROWS = 6
 local SLOT_COLS = 4
 local TOTAL_SLOTS = SLOT_ROWS * SLOT_COLS
-local INVENTORY_MARGIN = 10 * constants.UI_SCALE
+
+-- Helper functions to get scaled values
+local function getSlotSize()
+    return constants.INVENTORY_SLOT_SIZE or math.floor(40 * constants.UI_SCALE)
+end
+
+local function getSlotPadding()
+    return constants.INVENTORY_SLOT_PADDING or math.floor(2 * constants.UI_SCALE)
+end
+
+local function getInventoryMargin()
+    return constants.INVENTORY_MARGIN or math.floor(10 * constants.UI_SCALE)
+end
+
+-- Compatibility constants for old code
+local SLOT_SIZE = getSlotSize()
+local SLOT_PADDING = getSlotPadding()
+local INVENTORY_MARGIN = getInventoryMargin()
 
 -- Inventory colors (will be overridden by UI theme)
 local SLOT_BG_COLOR = {0.2, 0.2, 0.2, 0.9}
@@ -26,9 +41,33 @@ local panelSystem = {
     activePanel = nil
 }
 
+-- Update all panel layouts when scaling changes
+function panelSystem.updateLayout()
+    -- Update compatibility constants
+    SLOT_SIZE = getSlotSize()
+    SLOT_PADDING = getSlotPadding()
+    INVENTORY_MARGIN = getInventoryMargin()
+    
+    for panelId, panel in pairs(panelSystem.panels) do
+        if panel and panel.updateLayout then
+            panel:updateLayout()
+        elseif panel then
+            -- Update slot sizes for basic panels
+            panel.slotSize = constants.INVENTORY_SLOT_SIZE or math.floor(40 * constants.UI_SCALE)
+            panel.slotPadding = constants.INVENTORY_SLOT_PADDING or math.floor(2 * constants.UI_SCALE)
+        end
+    end
+end
+
 -- Base panel class
 local BasePanel = {}
 BasePanel.__index = BasePanel
+
+-- Update layout for scaling changes
+function BasePanel:updateLayout()
+    self.slotSize = constants.INVENTORY_SLOT_SIZE or math.floor(40 * constants.UI_SCALE)
+    self.slotPadding = constants.INVENTORY_SLOT_PADDING or math.floor(2 * constants.UI_SCALE)
+end
 
 function BasePanel.new(id, x, y, rows, cols)
     local self = setmetatable({}, BasePanel)
@@ -39,8 +78,8 @@ function BasePanel.new(id, x, y, rows, cols)
     self.cols = cols
     self.items = {}
     self.visible = false
-    self.slotSize = 40 * constants.UI_SCALE
-    self.slotPadding = 2 * constants.UI_SCALE
+    self.slotSize = constants.INVENTORY_SLOT_SIZE or math.floor(40 * constants.UI_SCALE)
+    self.slotPadding = constants.INVENTORY_SLOT_PADDING or math.floor(2 * constants.UI_SCALE)
 
     -- Initialize empty slots
     for i = 1, rows * cols do
@@ -234,8 +273,19 @@ function EquipmentPanel.new(x, y)
         [7] = "ring",
         [8] = "amulet"
     }
+    
+    -- Store relative position for scaling
+    self.relativeX = x
+    self.relativeY = y
 
     return self
+end
+
+-- Override updateLayout to maintain relative position
+function EquipmentPanel:updateLayout()
+    BasePanel.updateLayout(self)
+    self.x = math.floor(self.relativeX * constants.UI_SCALE)
+    self.y = math.floor(self.relativeY * constants.UI_SCALE)
 end
 
 -- Override canPlace to check equipment type compatibility
@@ -357,8 +407,23 @@ function HotbarPanel.new(x, y)
     setmetatable(self, HotbarPanel)
 
     self.visible = true  -- Hotbar is always visible
+    
+    -- Store relative position calculations
+    self.centerScreenX = true  -- Flag to indicate this should be centered horizontally
+    self.relativeY = y
 
     return self
+end
+
+-- Override updateLayout to center hotbar and maintain bottom position
+function HotbarPanel:updateLayout()
+    BasePanel.updateLayout(self)
+    -- Center horizontally and maintain relative bottom position
+    local screenWidth = love.graphics.getWidth()
+    local screenHeight = love.graphics.getHeight()
+    local hotbarWidth = 10 * (self.slotSize + self.slotPadding) - self.slotPadding
+    self.x = (screenWidth - hotbarWidth) / 2
+    self.y = screenHeight - constants.HOTBAR_BOTTOM_MARGIN
 end
 
 -- Override canPlace to allow any item in hotbar
@@ -411,6 +476,15 @@ function HotbarPanel:draw()
         love.graphics.setColor(colors.border)
         love.graphics.setLineWidth(1)
         ui.drawRoundedRectOutline(slotX, slotY, slotW, slotH, 3)
+        
+        -- Draw selection highlight if this slot is selected
+        local game = require("src.game")
+        if game and game.gameState and game.gameState.player and game.gameState.player.selectedHotbarSlot == i then
+            love.graphics.setColor(1, 1, 0, 0.8)  -- Yellow highlight
+            love.graphics.setLineWidth(3)
+            ui.drawRoundedRectOutline(slotX - 1, slotY - 1, slotW + 2, slotH + 2, 4)
+            love.graphics.setLineWidth(1)
+        end
 
         -- Draw item if present
         if item then
@@ -521,7 +595,8 @@ local dragState = {
     offsetY = 0,
     valid = false,
     targetPanel = nil,
-    targetIndex = nil
+    targetIndex = nil,
+    overPanel = false
 }
 
 -- Hover state for tooltips
@@ -596,7 +671,7 @@ function inventory.toggle(inv)
     inv.visible = not inv.visible
 end
 
--- Get slot rectangle for a given slot index
+-- Override getSlotRect for inventory panel to use correct dynamic position
 function inventory.getSlotRect(inv, i)
     if not inv.visible then return nil end
 
@@ -620,7 +695,7 @@ function inventory.getSlotRect(inv, i)
     return slotX, slotY, SLOT_SIZE, SLOT_SIZE
 end
 
--- Get slot index at screen coordinates
+-- Override slotAt for inventory panel to use correct position
 function inventory.slotAt(inv, x, y)
     if not inv.visible then return nil end
 
@@ -758,6 +833,7 @@ function inventory.clearDragState()
     dragState.fromIndex = nil
     dragState.valid = false
     dragState.targetIndex = nil
+    dragState.overPanel = false
 end
 
 -- Start dragging an item (enhanced for multi-panel)
@@ -765,13 +841,23 @@ function inventory.startDrag(panel, slotIndex, mouseX, mouseY, ctrlPressed, pane
     local item = panel.items[slotIndex]
     if not item then return false end
 
-    local slotX, slotY, slotW, slotH = panel:getSlotRect(slotIndex)
+    -- Get slot rectangle using appropriate method
+    local slotX, slotY, slotW, slotH
+    if panelId == "inventory" then
+        slotX, slotY, slotW, slotH = inventory.getSlotRect(panel, slotIndex)
+    elseif panel.getSlotRect then
+        slotX, slotY, slotW, slotH = panel:getSlotRect(slotIndex)
+    else
+        return false -- Invalid panel
+    end
+
     dragState.active = true
     dragState.item = item
     dragState.fromPanel = panelId or "inventory"
     dragState.fromIndex = slotIndex
     dragState.offsetX = mouseX - slotX - slotW/2
     dragState.offsetY = mouseY - slotY - slotH/2
+    dragState.overPanel = false
 
     -- Handle splitting
     if ctrlPressed and item.count and item.count > 1 then
@@ -787,10 +873,21 @@ end
 function inventory.updateDragTarget(mouseX, mouseY)
     if not dragState.active then return end
 
+    -- Check if mouse is over any inventory panel
+    local isOverAnyPanel = false
+
     -- Check all registered panels for target
     for panelId, panel in pairs(panelSystem.panels) do
         if panel.visible then
-            local targetIndex = panel:slotAt(mouseX, mouseY)
+            local targetIndex
+
+            -- Use appropriate slotAt method based on panel type
+            if panelId == "inventory" then
+                targetIndex = inventory.slotAt(panel, mouseX, mouseY)
+            elseif panel.slotAt then
+                targetIndex = panel:slotAt(mouseX, mouseY)
+            end
+
             if targetIndex then
                 -- Create a temporary item for validation
                 local tempItem = {
@@ -800,10 +897,25 @@ function inventory.updateDragTarget(mouseX, mouseY)
                     stackMax = dragState.item.stackMax,
                     type = dragState.item.type
                 }
-                dragState.valid, _ = panel:canPlace(tempItem, targetIndex, nil)
+
+                -- Use appropriate canPlace method
+                if panelId == "inventory" then
+                    dragState.valid, _ = inventory.canPlace(panel, tempItem, targetIndex, nil)
+                elseif panel.canPlace then
+                    dragState.valid, _ = panel:canPlace(tempItem, targetIndex, nil)
+                end
+
                 dragState.targetPanel = panelId
                 dragState.targetIndex = targetIndex
+                dragState.overPanel = true
                 return
+            else
+                -- Mouse is over this panel but not on a specific slot
+                -- Check if mouse is within panel bounds by checking if any panel contains the mouse
+                local isOverPanel = inventory.isMouseOverInventory(mouseX, mouseY)
+                if isOverPanel then
+                    isOverAnyPanel = true
+                end
             end
         end
     end
@@ -812,6 +924,7 @@ function inventory.updateDragTarget(mouseX, mouseY)
     dragState.valid = false
     dragState.targetPanel = nil
     dragState.targetIndex = nil
+    dragState.overPanel = isOverAnyPanel
 end
 
 -- Finish drag operation (enhanced for multi-panel)
@@ -838,17 +951,54 @@ function inventory.finishDrag(mouseX, mouseY)
                 ui.addChatMessage("Cannot move item: " .. message, {1, 0.5, 0.5})
             end
         end
+    elseif dragState.overPanel then
+        -- Mouse is over a panel but not on a valid slot - cancel drag, don't drop item
+        ui.addChatMessage("Drag cancelled - item returned to original position", {0.8, 0.8, 1})
     else
-        -- No valid target found - drop the item (RuneScape style)
+        -- Mouse is not over any panel - drop the item to the world
         local fromPanel = panelSystem.getPanel(dragState.fromPanel)
         if fromPanel and dragState.fromIndex and dragState.item then
+            -- Get player position for dropping items
+            local playerX, playerY = 0, 0
+            if gameState and gameState.player then
+                playerX = gameState.player.x
+                playerY = gameState.player.y
+            end
+
             -- Drop the item
             if dragState.quantity and dragState.quantity < (dragState.item.count or 1) then
-                -- Dropping partial stack
+                -- Dropping partial stack - create new item for ground
+                local droppedItem = {
+                    name = dragState.item.name,
+                    count = dragState.quantity,
+                    type = dragState.item.type,
+                    stackable = dragState.item.stackable,
+                    stackMax = dragState.item.stackMax,
+                    color = dragState.item.color,
+                    icon = dragState.item.icon,
+                    description = dragState.item.description,
+                    rarity = dragState.item.rarity
+                }
+
+                -- Reduce source stack
                 dragState.item.count = dragState.item.count - dragState.quantity
+
+                -- Add to world ground items
+                if world and world.addGroundItem then
+                    world.addGroundItem(droppedItem, playerX + love.math.random(-20, 20), playerY + love.math.random(-20, 20))
+                end
+
                 ui.addChatMessage("Dropped " .. dragState.quantity .. " " .. (dragState.item.name or "items"), {0.8, 0.6, 0.4})
             else
                 -- Drop entire item
+                local droppedItem = dragState.item
+
+                -- Add to world ground items
+                if world and world.addGroundItem then
+                    world.addGroundItem(droppedItem, playerX + love.math.random(-20, 20), playerY + love.math.random(-20, 20))
+                end
+
+                -- Remove from inventory
                 fromPanel.items[dragState.fromIndex] = nil
                 ui.addChatMessage("Dropped " .. (dragState.item.name or "item"), {0.8, 0.6, 0.4})
             end
@@ -932,8 +1082,8 @@ function inventory.draw(inv)
             if isHovered then
                 slotColor = colors.accent
                 hoverState.slotIndex = slotIndex
-            elseif dragState.targetIndex == slotIndex then
-                -- Target highlight for drag operation
+            elseif dragState.targetIndex == slotIndex and dragState.targetPanel == "inventory" then
+                -- Target highlight for drag operation (only for inventory panel)
                 if dragState.valid then
                     slotColor = {0, 0.8, 0, 0.7}  -- Green for valid
                 else
@@ -1109,20 +1259,39 @@ function inventory.drawTooltip(inv)
     local tooltipX = mouseX + 15
     local tooltipY = mouseY - 10
 
-    -- Build tooltip content
+    -- Build tooltip content with color information
     local lines = {}
-    table.insert(lines, item.name or "Unknown Item")
-
-    if item.description then
-        table.insert(lines, item.description)
-    end
-
-    if item.type then
-        table.insert(lines, "Type: " .. item.type)
-    end
-
+    
+    -- Item name with rarity color
+    local nameColor = {0.9, 0.85, 0.8, 1.0} -- Default white
     if item.rarity then
-        table.insert(lines, "Rarity: " .. item.rarity)
+        if item.rarity == "common" then
+            nameColor = {0.8, 0.8, 0.8, 1.0} -- Gray
+        elseif item.rarity == "uncommon" then
+            nameColor = {0.3, 0.8, 0.3, 1.0} -- Green
+        elseif item.rarity == "rare" then
+            nameColor = {0.3, 0.5, 1.0, 1.0} -- Blue
+        elseif item.rarity == "epic" then
+            nameColor = {0.6, 0.3, 1.0, 1.0} -- Purple
+        elseif item.rarity == "legendary" then
+            nameColor = {1.0, 0.6, 0.0, 1.0} -- Orange
+        end
+    end
+    table.insert(lines, {text = item.name or "Unknown Item", color = nameColor})
+
+    -- Description in light gray
+    if item.description then
+        table.insert(lines, {text = item.description, color = {0.8, 0.8, 0.8, 1.0}})
+    end
+
+    -- Type in yellow
+    if item.type then
+        table.insert(lines, {text = "Type: " .. item.type, color = {1.0, 1.0, 0.6, 1.0}})
+    end
+
+    -- Rarity in its own color (same as name color)
+    if item.rarity then
+        table.insert(lines, {text = "Rarity: " .. item.rarity, color = nameColor})
     end
 
     -- Calculate tooltip dimensions
@@ -1132,7 +1301,8 @@ function inventory.drawTooltip(inv)
     local lineHeight = font:getHeight() + 2
 
     for _, line in ipairs(lines) do
-        local width = font:getWidth(line)
+        local text = type(line) == "table" and line.text or line
+        local width = font:getWidth(text)
         maxWidth = math.max(maxWidth, width)
         totalHeight = totalHeight + lineHeight
     end
@@ -1173,75 +1343,23 @@ function inventory.drawTooltip(inv)
     ui.drawRoundedRectOutline(tooltipX, tooltipY, tooltipWidth, tooltipHeight, 6)
     love.graphics.setLineWidth(1)
 
-    -- Draw tooltip text
-    love.graphics.setColor(colors.text)
+    -- Draw tooltip text with colors
     local yOffset = tooltipY + 6
     for _, line in ipairs(lines) do
-        love.graphics.print(line, tooltipX + 8, yOffset)
+        if type(line) == "table" then
+            -- Colored text
+            love.graphics.setColor(line.color)
+            love.graphics.print(line.text, tooltipX + 8, yOffset)
+        else
+            -- Fallback for plain text (old format)
+            love.graphics.setColor(colors.text)
+            love.graphics.print(line, tooltipX + 8, yOffset)
+        end
         yOffset = yOffset + lineHeight
     end
 end
 
--- Show context menu for item
-function inventory.showContextMenu(inv, slotIndex, x, y)
-    local item = inv.items[slotIndex]
-    if not item then return end
 
-    -- Simple RuneScape-style context menu
-    local options = {}
-    
-    -- Use/Equip option (primary action at top)
-    if item.onUse then
-        table.insert(options, {
-            text = "Use",
-            action = function()
-                if item.onUse then
-                    item.onUse(inv, slotIndex)
-                    gameState.contextMenu = nil
-                end
-            end,
-            enabled = true
-        })
-    elseif item.onEquip then
-        table.insert(options, {
-            text = "Equip",
-            action = function()
-                if item.onEquip then
-                    item.onEquip(inv, slotIndex)
-                    gameState.contextMenu = nil
-                end
-            end,
-            enabled = true
-        })
-    end
-    
-    -- Drop option
-    table.insert(options, {
-        text = "Drop",
-        action = function()
-            inventory.dropItem(inv, slotIndex)
-            gameState.contextMenu = nil
-        end,
-        enabled = true
-    })
-    
-    -- Cancel option
-    table.insert(options, {
-        text = "Cancel",
-        action = function()
-            gameState.contextMenu = nil
-        end,
-        enabled = true
-    })
-    
-    -- Store context menu in game state for rendering
-    gameState.contextMenu = {
-        x = x,
-        y = y,
-        options = options,
-        slotIndex = slotIndex
-    }
-end
 
 -- Drop item dialog for "Drop X" option
 function inventory.dropItemDialog(inv, slotIndex)
@@ -1424,20 +1542,51 @@ function inventory.isMouseOverInventory(mouseX, mouseY)
     -- Check all registered panels
     for panelId, panel in pairs(panelSystem.panels) do
         if panel and panel.visible then
-            local panelX = panel.x or 0
-            local panelY = panel.y or 0
-            local panelWidth, panelHeight
-            
-            if panel.cols and panel.rows and panel.slotSize then
+            local panelX, panelY, panelWidth, panelHeight
+
+            -- Calculate actual panel position based on panel type
+            if panelId == "inventory" then
+                -- Inventory panel is positioned dynamically in bottom-right
+                local screenWidth = love.graphics.getWidth()
+                local screenHeight = love.graphics.getHeight()
+                local slotSize = constants.INVENTORY_SLOT_SIZE or math.floor(40 * constants.UI_SCALE)
+                local slotPadding = constants.INVENTORY_SLOT_PADDING or math.floor(2 * constants.UI_SCALE)
+                local inventoryMargin = constants.INVENTORY_MARGIN or math.floor(10 * constants.UI_SCALE)
+                local inventoryWidth = (SLOT_COLS * slotSize) + ((SLOT_COLS - 1) * slotPadding) + (inventoryMargin * 2)
+                local inventoryHeight = (SLOT_ROWS * slotSize) + ((SLOT_ROWS - 1) * slotPadding) + (inventoryMargin * 2) + 30
+                panelX = screenWidth - inventoryWidth - 10
+                panelY = screenHeight - inventoryHeight - 10
+                panelWidth = inventoryWidth
+                panelHeight = inventoryHeight
+            elseif panelId == "equipment" then
+                -- Equipment panel uses stored position
+                panelX = panel.x or 0
+                panelY = panel.y or 0
+                local padding = panel.slotPadding or 5
+                panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
+                panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
+            elseif panelId == "hotbar" then
+                -- Hotbar panel uses stored position (calculated in game.lua)
+                panelX = panel.x or 0
+                panelY = panel.y or 0
                 local padding = panel.slotPadding or 5
                 panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
                 panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
             else
-                panelWidth = 300
-                panelHeight = 200
+                -- Default calculation for other panels
+                panelX = panel.x or 0
+                panelY = panel.y or 0
+                if panel.cols and panel.rows and panel.slotSize then
+                    local padding = panel.slotPadding or 5
+                    panelWidth = panel.cols * panel.slotSize + (panel.cols - 1) * padding + 20
+                    panelHeight = panel.rows * panel.slotSize + (panel.rows - 1) * padding + 40
+                else
+                    panelWidth = 300
+                    panelHeight = 200
+                end
             end
-            
-            if mouseX >= panelX and mouseX <= panelX + panelWidth and 
+
+            if mouseX >= panelX and mouseX <= panelX + panelWidth and
                mouseY >= panelY and mouseY <= panelY + panelHeight then
                 return true, panelId, panel
             end
