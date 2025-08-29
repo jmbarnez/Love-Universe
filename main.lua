@@ -107,3 +107,7 @@ end
 function love.resize(w, h)
     game.onWindowResize(w, h)
 end
+
+function love.wheelmoved(x, y)
+    game.handleMouseWheel(x, y)
+end

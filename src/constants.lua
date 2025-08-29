@@ -81,6 +81,7 @@ constants.CHICKEN_SPAWN_RATE = 0.01 -- 1% chance for chickens in grasslands (ver
 constants.STICK_SPAWN_RATE = 0.08 -- 8% chance for sticks in grasslands
 constants.PLAYER_ATTACK_COOLDOWN = 2.0 -- 2 second cooldown between player attacks
 constants.INTERACTION_DISTANCE = 75 -- Interaction distance in pixels (about 2.5 tiles)
+constants.ATTACK_RANGE = 45 -- Attack range in pixels (about 1.4 tiles) - shorter than interaction range
 
 -- Object properties
 constants.TREE_SIZE = 8

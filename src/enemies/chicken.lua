@@ -41,7 +41,46 @@ function chicken.create(worldX, worldY)
     -- Initialize combat state
     chick.combatState = combat.initCombatState(chick)
 
+    -- Create a simple icon for the chicken (white oval with details)
+    chick.icon = chicken.createIcon()
+
     return chick
+end
+
+-- Create a simple icon for the chicken
+function chicken.createIcon()
+    local iconSize = 32
+    local canvas = love.graphics.newCanvas(iconSize, iconSize)
+
+    love.graphics.setCanvas(canvas)
+    love.graphics.clear(0, 0, 0, 0) -- Transparent background
+
+    -- Draw chicken body (oval shape)
+    love.graphics.setColor(1, 1, 1) -- White body
+    love.graphics.ellipse("fill", iconSize/2, iconSize/2 + 2, 8, 6)
+
+    -- Draw chicken head
+    love.graphics.setColor(1, 1, 1) -- White head
+    love.graphics.circle("fill", iconSize/2 + 4, iconSize/2 - 2, 4)
+
+    -- Draw beak
+    love.graphics.setColor(1, 0.8, 0) -- Orange beak
+    love.graphics.polygon("fill",
+        iconSize/2 + 4 + 2, iconSize/2 - 2,
+        iconSize/2 + 4 + 3, iconSize/2 - 2 - 1,
+        iconSize/2 + 4 + 3, iconSize/2 - 2 + 1)
+
+    -- Draw eye
+    love.graphics.setColor(0, 0, 0) -- Black eye
+    love.graphics.circle("fill", iconSize/2 + 4 + 1, iconSize/2 - 2 - 0.5, 0.5)
+
+    -- Draw legs
+    love.graphics.setColor(1, 0.8, 0) -- Orange legs
+    love.graphics.rectangle("fill", iconSize/2 - 2, iconSize/2 + 6, 1, 3)
+    love.graphics.rectangle("fill", iconSize/2 + 2, iconSize/2 + 6, 1, 3)
+
+    love.graphics.setCanvas() -- Reset to main canvas
+    return canvas
 end
 
 -- Update chicken (combat AI and timers)
@@ -81,55 +120,7 @@ function chicken.die(chick, groundItems)
     end
 end
 
--- Draw a chicken
-function chicken.draw(chick, camera, isInteractable, isTargeted, isHovered)
-    if not chick.alive then return end
 
-    -- Draw chicken at its world position (camera translation is handled by game.draw)
-    local screenX = chick.worldX
-    local screenY = chick.worldY
-
-    local interaction_outline = require("src.interaction_outline")
-
-    -- Draw interaction outline if this chicken is the target
-    if isTargeted then
-        interaction_outline.draw(chick, screenX, screenY, {1, 0, 0}) -- Red
-    elseif isHovered then
-        interaction_outline.draw(chick, screenX, screenY, {1, 1, 1}) -- White
-    elseif isInteractable then
-        interaction_outline.draw(chick, screenX, screenY)
-    end
-
-    -- Draw chicken body (oval shape)
-    love.graphics.setColor(1, 1, 1) -- White body
-    love.graphics.ellipse("fill", screenX, screenY, chick.size/2, chick.size/3)
-
-    -- Draw chicken head
-    love.graphics.setColor(1, 1, 1) -- White head
-    love.graphics.circle("fill", screenX + chick.size/4, screenY - chick.size/4, chick.size/4)
-
-    -- Draw beak
-    love.graphics.setColor(1, 0.8, 0) -- Orange beak
-    love.graphics.polygon("fill",
-        screenX + chick.size/4 + chick.size/8, screenY - chick.size/4,
-        screenX + chick.size/4 + chick.size/6, screenY - chick.size/4 - chick.size/12,
-        screenX + chick.size/4 + chick.size/6, screenY - chick.size/4 + chick.size/12)
-
-    -- Draw eye
-    love.graphics.setColor(0, 0, 0) -- Black eye
-    love.graphics.circle("fill", screenX + chick.size/4 + chick.size/12, screenY - chick.size/4 - chick.size/16, chick.size/16)
-
-    -- Draw legs
-    love.graphics.setColor(1, 0.8, 0) -- Orange legs
-    love.graphics.rectangle("fill", screenX - chick.size/8, screenY + chick.size/3, 2, chick.size/4)
-    love.graphics.rectangle("fill", screenX + chick.size/8 - 2, screenY + chick.size/3, 2, chick.size/4)
-
-    -- UI now handled by tooltip system in HUD
-    -- Removed entity UI elements above chicken heads
-
-    -- Reset color
-    love.graphics.setColor(1, 1, 1)
-end
 
 -- Check if player is close enough to interact with chicken
 function chicken.canInteract(playerX, playerY, chick)

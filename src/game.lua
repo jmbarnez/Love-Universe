@@ -29,6 +29,10 @@ local ui = require("src.ui")
 local gameState = {
     player = nil,
     camera = nil, -- Will be initialized as hump.camera
+    cameraZoom = 1.0, -- Camera zoom level (1.0 = normal, >1.0 = zoomed in, <1.0 = zoomed out)
+    cameraZoomMin = 0.5, -- Minimum zoom level
+    cameraZoomMax = 3.0, -- Maximum zoom level
+    cameraZoomSpeed = 0.1, -- How much zoom changes per wheel click
     world = {},
     objects = {},
     chickens = {},
@@ -77,6 +81,7 @@ function game.init()
     -- Initialize hump camera centered on player
     gameState.camera = Camera()
     gameState.camera:lookAt(spawnX, spawnY)
+    gameState.camera:zoomTo(gameState.cameraZoom) -- Apply initial zoom
 
     -- Count chickens and ensure max 3 limit
     local chickenCount = 0
@@ -176,11 +181,17 @@ function game.update(dt)
 
     -- Update player movement
     if gameState.player then
+        -- Determine the appropriate range based on movement target type
+        local range = constants.INTERACTION_DISTANCE
+        if gameState.movementTarget and gameState.movementTarget.isAttackTarget then
+            range = constants.ATTACK_RANGE
+        end
+        
         player.update(gameState.player, dt,
             function(x, y) return world.isWalkable(x, y, gameState.world) end,
             world.isInWorld,
             gameState.movementTarget,
-            constants.INTERACTION_DISTANCE, game)
+            range, game)
 
         -- Clear movement target if reached
         if gameState.movementTarget and gameState.movementTarget.reached then
@@ -348,8 +359,10 @@ function game.tryAttackChicken()
         end
     end
 
-    -- Attack only the closest chicken (if any)
+    -- Handle closest chicken (if any)
     if closestChicken then
+        local distance = lume.distance(closestChicken.worldX, closestChicken.worldY, playerX, playerY)
+        
         -- Set player target for auto-attacking
         gameState.playerTarget = {
             entity = closestChicken,
@@ -357,19 +370,30 @@ function game.tryAttackChicken()
             tileY = closestTileY
         }
 
-        -- Set player in combat (chicken will handle its own combat state)
-        gameState.player.inCombat = true
+        -- Check if within attack range
+        if distance <= constants.ATTACK_RANGE then
+            -- Close enough to attack immediately
+            gameState.player.inCombat = true
 
-        local died = chicken.attack(closestChicken, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
-        if died then
-            -- Remove dead chicken from the game
-            gameState.chickens[closestTileX][closestTileY] = nil
-            -- Set delay before clearing target so HP bar can show "DEAD"
-            gameState.targetClearTime = gameState.gameTime + 2.0 -- Show dead status for 2 seconds
-            gameState.player.inCombat = false
+            local died = chicken.attack(closestChicken, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
+            if died then
+                -- Remove dead chicken from the game
+                gameState.chickens[closestTileX][closestTileY] = nil
+                -- Set delay before clearing target so HP bar can show "DEAD"
+                gameState.targetClearTime = gameState.gameTime + 2.0 -- Show dead status for 2 seconds
+                gameState.player.inCombat = false
+            end
+            -- Set attack cooldown
+            gameState.lastPlayerAttackTime = gameState.gameTime
+        else
+            -- Too far to attack - move to attack range
+            gameState.movementTarget = {
+                x = closestChicken.worldX,
+                y = closestChicken.worldY,
+                isAttackTarget = true,
+                targetEntity = closestChicken
+            }
         end
-        -- Set attack cooldown
-        gameState.lastPlayerAttackTime = gameState.gameTime
     end
 end
 
@@ -471,6 +495,21 @@ function game.handleMouseMove(x, y, dx, dy, istouch)
     local currentDragState = inventory.getDragState()
     if currentDragState and currentDragState.active then
         inventory.updateDragTarget(x, y)
+    end
+end
+
+-- Handle mouse wheel for camera zoom
+function game.handleMouseWheel(x, y)
+    -- y > 0 means scroll up (zoom in), y < 0 means scroll down (zoom out)
+    if y > 0 then
+        gameState.cameraZoom = math.min(gameState.cameraZoomMax, gameState.cameraZoom + gameState.cameraZoomSpeed)
+    elseif y < 0 then
+        gameState.cameraZoom = math.max(gameState.cameraZoomMin, gameState.cameraZoom - gameState.cameraZoomSpeed)
+    end
+
+    -- Apply zoom to camera
+    if gameState.camera then
+        gameState.camera:zoomTo(gameState.cameraZoom)
     end
 end
 
@@ -587,8 +626,8 @@ function game.draw()
     world.drawTiles(gameState.world, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT)
     world.drawObjects(gameState.objects, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT)
 
-    -- Draw chickens
-    world.drawChickens(gameState.chickens, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT, gameState.player.x, gameState.player.y, gameState.playerTarget, gameState.mouse.worldX, gameState.mouse.worldY)
+    -- Draw entities (chickens, NPCs, etc.)
+    world.drawEntities(gameState.chickens, gameState.camera, constants.GAME_WIDTH, constants.GAME_HEIGHT, gameState.player.x, gameState.player.y, gameState.playerTarget, gameState.mouse.worldX, gameState.mouse.worldY)
 
     -- Draw player
     if gameState.player then
@@ -732,8 +771,8 @@ function game.updateAutoAttack(dt)
         end
     end
 
-    -- Auto-attack if cooldown is ready
-    if game.canPlayerAttack() then
+    -- Auto-attack if cooldown is ready and target is within attack range
+    if game.canPlayerAttack() and game.isTargetInAttackRange(gameState.playerTarget) then
         game.performAutoAttack()
     end
 end
@@ -779,19 +818,31 @@ function game.findPlayerTarget()
     end
 end
 
--- Check if the current target is still valid
+-- Check if the current target is still valid (alive and in interaction range)
 function game.isTargetValid(target)
     if not target or not target.entity then return false end
 
     -- Check if target is still alive
     if not target.entity.alive then return false end
 
-    -- Check if target is still in range
+    -- Check if target is still in interaction range (not attack range)
     local playerX = gameState.player.x
     local playerY = gameState.player.y
     local distance = lume.distance(target.entity.worldX, target.entity.worldY, playerX, playerY)
 
-    return distance <= constants.INTERACTION_DISTANCE -- INTERACTION_DISTANCE
+    return distance <= constants.INTERACTION_DISTANCE -- Target is still valid if in interaction range
+end
+
+-- Check if the current target is within attack range
+function game.isTargetInAttackRange(target)
+    if not target or not target.entity then return false end
+    if not target.entity.alive then return false end
+    
+    local playerX = gameState.player.x
+    local playerY = gameState.player.y
+    local distance = lume.distance(target.entity.worldX, target.entity.worldY, playerX, playerY)
+    
+    return distance <= constants.ATTACK_RANGE
 end
 
 -- Perform an automatic attack on the current target
@@ -883,8 +934,12 @@ function game.executeAttackOnTarget(targetEntity)
                     tileY = y
                 }
                 
-                -- Execute immediate attack if off cooldown
-                if game.canPlayerAttack() then
+                -- Execute immediate attack if off cooldown and within attack range
+                local playerX = gameState.player.x
+                local playerY = gameState.player.y
+                local distance = lume.distance(targetEntity.worldX, targetEntity.worldY, playerX, playerY)
+                
+                if game.canPlayerAttack() and distance <= constants.ATTACK_RANGE then
                     local died = chicken.attack(targetEntity, gameState.player, gameState.gameTime, game.addDamageNumber, gameState.groundItems)
                     if died then
                         gameState.chickens[x][y] = nil
