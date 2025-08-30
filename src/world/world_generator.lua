@@ -10,24 +10,27 @@ local constants = require("src.constants")
 function world_generator.generate_objects(game_world, world_config)
     local objects = {}
     local chickens = {}
+    local cows = {}
     local ground_items_list = {}
 
-    -- Initialize empty objects and chickens tables (still use tile grid for storage)
+    -- Initialize empty objects, chickens, and cows tables (still use tile grid for storage)
     local tiles_x = math.ceil(world_config.world_size.width / constants.TILE_SIZE)
     local tiles_y = math.ceil(world_config.world_size.height / constants.TILE_SIZE)
 
     for x = 1, tiles_x do
         objects[x] = {}
         chickens[x] = {}
+        cows[x] = {}
         for y = 1, tiles_y do
             objects[x][y] = nil
             chickens[x][y] = nil
+            cows[x][y] = nil
         end
     end
 
     -- Generate enemies based on configuration
     for enemy_type, enemy_config in pairs(world_config.enemies or {}) do
-        world_generator.spawn_enemies(enemy_type, enemy_config, game_world, chickens, tiles_x, tiles_y)
+        world_generator.spawn_enemies(enemy_type, enemy_config, game_world, chickens, cows, tiles_x, tiles_y)
     end
 
     -- Generate items based on configuration
@@ -40,59 +43,58 @@ function world_generator.generate_objects(game_world, world_config)
 
 
 
-    return objects, chickens, ground_items_list
+    return objects, chickens, cows, ground_items_list
 end
 
 -- Spawn enemies based on configuration
-function world_generator.spawn_enemies(enemy_type, enemy_config, game_world, chickens, tiles_x, tiles_y)
+function world_generator.spawn_enemies(enemy_type, enemy_config, game_world, chickens, cows, tiles_x, tiles_y)
     local spawned_count = 0
 
     if enemy_type == "chicken" then
-        -- Spawn chickens in specified biomes
-        for x = 1, tiles_x do
-            for y = 1, tiles_y do
-                local tile = game_world[x][y]
+        -- Spawn initial number of chickens
+        for i = 1, enemy_config.initial_spawn_count do
+            local x, y = world_generator.find_random_spawn_location(game_world, enemy_config.biomes, tiles_x, tiles_y)
+            if x and y then
+                local tile_left = (x - 1) * constants.TILE_SIZE
+                local tile_top = (y - 1) * constants.TILE_SIZE
+                local pixel_x = tile_left + love.math.random(0, constants.TILE_SIZE - 1)
+                local pixel_y = tile_top + love.math.random(0, constants.TILE_SIZE - 1)
 
-                if world_generator.is_biome_allowed(tile.type, enemy_config.biomes) then
-                    local spawn_chance = love.math.random()
-
-                    if spawn_chance < enemy_config.spawn_rate and spawned_count < enemy_config.max_count then
-                        -- Spawn enemy at random pixel coordinates within this tile
-                        local tile_left = (x - 1) * constants.TILE_SIZE
-                        local tile_top = (y - 1) * constants.TILE_SIZE
-                        local pixel_x = tile_left + love.math.random(0, constants.TILE_SIZE - 1)
-                        local pixel_y = tile_top + love.math.random(0, constants.TILE_SIZE - 1)
-
-                        local enemy_module = require("src.enemies." .. enemy_type)
-                        chickens[x][y] = enemy_module.create(pixel_x, pixel_y)
-                        spawned_count = spawned_count + 1
-                    end
-                end
+                local enemy_module = require("src.enemies." .. enemy_type)
+                chickens[x][y] = enemy_module.create(pixel_x, pixel_y)
+                spawned_count = spawned_count + 1
             end
         end
+    elseif enemy_type == "cow" then
+        -- Spawn initial number of cows
+        for i = 1, enemy_config.initial_spawn_count do
+            local x, y = world_generator.find_random_spawn_location(game_world, enemy_config.biomes, tiles_x, tiles_y)
+            if x and y then
+                local tile_left = (x - 1) * constants.TILE_SIZE
+                local tile_top = (y - 1) * constants.TILE_SIZE
+                local pixel_x = tile_left + love.math.random(0, constants.TILE_SIZE - 1)
+                local pixel_y = tile_top + love.math.random(0, constants.TILE_SIZE - 1)
 
-        -- Ensure at least some enemies spawn near the center (fallback)
-        if enemy_config.guaranteed_near_center and spawned_count < enemy_config.max_count then
-            local center_tile_x = math.floor(tiles_x / 2)
-            local center_tile_y = math.floor(tiles_y / 2)
-
-            for x = math.max(1, center_tile_x - enemy_config.center_spawn_radius), math.min(tiles_x, center_tile_x + enemy_config.center_spawn_radius) do
-                for y = math.max(1, center_tile_y - enemy_config.center_spawn_radius), math.min(tiles_y, center_tile_y + enemy_config.center_spawn_radius) do
-                    local tile = game_world[x][y]
-                    if chickens[x][y] == nil and world_generator.is_biome_allowed(tile.type, enemy_config.biomes) and love.math.random() < enemy_config.center_spawn_chance and spawned_count < enemy_config.max_count then
-                        local tile_left = (x - 1) * constants.TILE_SIZE
-                        local tile_top = (y - 1) * constants.TILE_SIZE
-                        local pixel_x = tile_left + love.math.random(0, constants.TILE_SIZE - 1)
-                        local pixel_y = tile_top + love.math.random(0, constants.TILE_SIZE - 1)
-
-                        local enemy_module = require("src.enemies." .. enemy_type)
-                        chickens[x][y] = enemy_module.create(pixel_x, pixel_y)
-                        spawned_count = spawned_count + 1
-                    end
-                end
+                local enemy_module = require("src.enemies." .. enemy_type)
+                cows[x][y] = enemy_module.create(pixel_x, pixel_y)
+                spawned_count = spawned_count + 1
             end
         end
     end
+end
+
+-- Find a random spawn location for an entity
+function world_generator.find_random_spawn_location(game_world, allowed_biomes, tiles_x, tiles_y)
+    for i = 1, 100 do -- Try 100 times to find a valid location
+        local x = love.math.random(1, tiles_x)
+        local y = love.math.random(1, tiles_y)
+        local tile = game_world[x][y]
+
+        if world_generator.is_biome_allowed(tile.type, allowed_biomes) then
+            return x, y
+        end
+    end
+    return nil, nil
 end
 
 -- Spawn items based on configuration
@@ -191,9 +193,9 @@ function world_generator.generate(world_config)
     local game_world, height_map, temp_map, humidity_map = biomes.generate_world(world_config)
 
     -- Generate scattered objects, enemies, and ground items
-    local objects, chickens, ground_items_list = world_generator.generate_objects(game_world, world_config)
+    local objects, chickens, cows, ground_items_list = world_generator.generate_objects(game_world, world_config)
 
-    return game_world, objects, chickens, ground_items_list, height_map, temp_map, humidity_map
+    return game_world, objects, chickens, cows, ground_items_list, height_map, temp_map, humidity_map
 end
 
 return world_generator

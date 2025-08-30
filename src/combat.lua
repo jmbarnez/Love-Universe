@@ -6,77 +6,58 @@ local constants = require("src.constants")
 local lume = require("lib.lume")
 
 -- Combat constants
-local ATTACK_COOLDOWN = 2.0 -- Base attack cooldown for enemies
-local RETALIATION_DELAY = 1.0 -- Delay before enemy retaliates
-local INTERACTION_DISTANCE = 75 -- Distance within which combat can occur
 local PLAYER_ATTACK_DAMAGE = 1 -- Player deals 1 damage per hit
 
 -- Initialize combat state for an entity
 function combat.initCombatState(entity)
     return {
         inCombat = false,
-        lastAttackTime = 0,
-        lastPlayerAttackTime = 0,
-        retaliationTimer = 0,
-        targetPlayer = nil,
-        attackCooldown = entity.attackCooldown or ATTACK_COOLDOWN,
-        retaliationDelay = entity.retaliationDelay or RETALIATION_DELAY,
-        interactionDistance = entity.interactionDistance or INTERACTION_DISTANCE
+        combatTimer = 0,
+        isPlayerTurn = true, -- Player always goes first
+        lastTurnTime = 0
     }
 end
 
--- Start retaliation against a player
-function combat.startRetaliation(entity, player, currentTime)
-    if not entity.combatState then
-        entity.combatState = combat.initCombatState(entity)
-    end
-
-    -- Only start retaliation if not already in combat and not already retaliating
-    if not entity.combatState.inCombat and entity.combatState.retaliationTimer <= 0 then
-        entity.combatState.retaliationTimer = entity.combatState.retaliationDelay
-        -- Don't reset combat state - just start the timer
-    end
-end
-
--- Update combat state
+-- Update combat state for turn-based combat
 function combat.update(entity, dt, currentTime, playerX, playerY, player, onDamage)
-    if not entity.alive or not entity.combatState then return end
-
-    -- Handle retaliation timer
-    if entity.combatState.retaliationTimer > 0 then
-        entity.combatState.retaliationTimer = entity.combatState.retaliationTimer - dt
-        if entity.combatState.retaliationTimer <= 0 then
-            entity.combatState.inCombat = true
-            entity.combatState.targetPlayer = player
-        end
+    if not entity.alive or not entity.combatState or not entity.combatState.inCombat then return end
+    
+    -- Check if player is still in range
+    local distance = lume.distance(entity.worldX, entity.worldY, playerX, playerY)
+    if distance > constants.ATTACK_RANGE then
+        combat.endCombat(entity)
+        return
     end
-
-    -- Handle attacking player if in combat
-    if entity.combatState.inCombat and entity.combatState.targetPlayer then
-        local distance = lume.distance(entity.worldX, entity.worldY, playerX, playerY)
-
-        if distance <= entity.combatState.interactionDistance then
-            -- Check if enough time has passed since last attack
-            local timeSinceLastAttack = currentTime - entity.combatState.lastAttackTime
-
-            if timeSinceLastAttack >= entity.combatState.attackCooldown then
-                combat.attackPlayer(entity, player, onDamage)
-                entity.combatState.lastAttackTime = currentTime
+    
+    -- Update combat timer
+    entity.combatState.combatTimer = entity.combatState.combatTimer + dt
+    
+    -- Check for turn timing (1 second per turn)
+    if entity.combatState.combatTimer >= 1.0 then
+        entity.combatState.combatTimer = 0
+        
+        -- Execute current turn
+        if entity.combatState.isPlayerTurn then
+            -- Player's turn - player auto-attacks
+            local playerDied = combat.playerAutoAttack(entity, player, currentTime, onDamage)
+            if not playerDied then
+                -- Switch to enemy turn after player attack
+                entity.combatState.isPlayerTurn = false
             end
         else
-            -- Player moved out of range, end combat
-            entity.combatState.inCombat = false
-            entity.combatState.targetPlayer = nil
+            -- Enemy's turn - enemy attacks player
+            combat.attackPlayer(entity, player, onDamage)
+            -- Switch to player turn after enemy attack
+            entity.combatState.isPlayerTurn = true
         end
     end
 end
 
--- Entity attacks player
+-- Enemy attacks player
 function combat.attackPlayer(entity, player, onDamage)
     if not entity.alive or not player then return end
 
-    local damage = entity.attackDamage or 1
-    local oldHealth = player.health
+    local damage = 1 -- Enemies deal 1 damage
     player.health = math.max(0, player.health - damage)
 
     -- Trigger damage effect at player's position
@@ -89,16 +70,16 @@ function combat.attackPlayer(entity, player, onDamage)
         player.flashTimer = 0.2 -- 0.2 second flash
     end
 
-    -- If player dies, stop combat
+    -- If player dies, end combat
     if player.health <= 0 then
         combat.endCombat(entity)
     end
 end
 
--- Player attacks entity
-function combat.playerAttack(entity, player, currentTime, onDamage)
+-- Player auto-attack during turn-based combat
+function combat.playerAutoAttack(entity, player, currentTime, onDamage)
     if not entity.alive then return false end
-
+    
     local damage = PLAYER_ATTACK_DAMAGE
     entity.health = entity.health - damage
 
@@ -111,10 +92,42 @@ function combat.playerAttack(entity, player, currentTime, onDamage)
     local damage_effects = require("src.damage_effects")
     damage_effects.addFlash(entity)
 
-    -- Start retaliation if this is the first attack
-    combat.startRetaliation(entity, player, currentTime)
+    if entity.health <= 0 then
+        -- End combat when entity dies
+        combat.endCombat(entity)
+        return true -- Entity died
+    end
 
-    entity.combatState.lastPlayerAttackTime = currentTime
+    return false -- Entity still alive
+end
+
+-- Player attacks entity (manual attack, not auto-attack)
+function combat.playerAttack(entity, player, currentTime, onDamage)
+    if not entity.alive then return false end
+    
+    -- Start combat if not already started
+    if not entity.combatState.inCombat then
+        entity.combatState.inCombat = true
+        entity.combatState.combatTimer = 0
+        entity.combatState.isPlayerTurn = love.math.random() < 0.5 -- 50% chance for player to go first
+    end
+    
+    -- Only allow manual attack on player's turn
+    if not entity.combatState.isPlayerTurn then
+        return false -- Not player's turn
+    end
+
+    local damage = PLAYER_ATTACK_DAMAGE
+    entity.health = entity.health - damage
+
+    -- Trigger damage effect
+    if onDamage then
+        onDamage(entity.worldX, entity.worldY, damage, {1, 0.3, 0.3}) -- Red for player damage
+    end
+
+    -- Add flash effect
+    local damage_effects = require("src.damage_effects")
+    damage_effects.addFlash(entity)
 
     if entity.health <= 0 then
         -- Don't set alive = false here, let the entity's own update function handle death
@@ -129,23 +142,23 @@ function combat.isInCombat(entity)
     return entity.combatState and entity.combatState.inCombat
 end
 
--- End combat for an entity
+-- End combat for an entity (simplified)
 function combat.endCombat(entity)
     if entity.combatState then
         entity.combatState.inCombat = false
-        entity.combatState.targetPlayer = nil
-        entity.combatState.retaliationTimer = 0
     end
+end
+
+-- Check if it's the player's turn
+function combat.isPlayerTurn(entity)
+    return entity.combatState and entity.combatState.inCombat and entity.combatState.isPlayerTurn
 end
 
 -- Get combat status for debugging
 function combat.getCombatStatus(entity)
     if not entity.combatState then return "No combat state" end
-
-    return string.format("Combat: %s, Timer: %.1f, Target: %s",
-        tostring(entity.combatState.inCombat),
-        entity.combatState.retaliationTimer,
-        tostring(entity.combatState.targetPlayer ~= nil))
+    local turnInfo = entity.combatState.inCombat and (entity.combatState.isPlayerTurn and " (Player's turn)" or " (Enemy's turn)") or ""
+    return "Combat: " .. tostring(entity.combatState.inCombat) .. turnInfo
 end
 
 return combat

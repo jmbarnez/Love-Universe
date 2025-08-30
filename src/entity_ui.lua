@@ -20,7 +20,7 @@ function entity_ui.drawMiniHealthBar(entity, screenX, screenY, barWidth, barHeig
     if healthPercent < 0.3 then
         healthColor = {1, 0, 0} -- Red when low
     elseif healthPercent < 0.6 then
-        healthColor = {1, 1, 0} -- Yellow when medium
+        healthColor = {1, 0.5, 0} -- Orange when medium
     end
 
     love.graphics.setColor(healthColor[1], healthColor[2], healthColor[3], 0.9)

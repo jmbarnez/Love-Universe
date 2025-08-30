@@ -11,8 +11,8 @@ world_config.default = {
     -- World generation settings
     seed = nil, -- nil = random seed
     world_size = {
-        width = 3200, -- pixels
-        height = 3200  -- pixels
+        width = 1600, -- pixels (must match constants.lua)
+        height = 1600  -- pixels (must match constants.lua)
     },
 
     -- Biome generation parameters
@@ -30,19 +30,25 @@ world_config.default = {
     enemies = {
         chicken = {
             spawn_rate = 0.01,      -- 1% chance per suitable tile
+            initial_spawn_count = 3, -- Number of chickens to spawn initially
             max_count = 3,          -- Maximum chickens in world
-            guaranteed_near_center = true, -- Always spawn some near center
-            center_spawn_radius = 8, -- tiles from center
-            center_spawn_chance = 0.4,
+            respawn_time = 60,      -- Time in seconds to respawn a chicken
             biomes = {"grassland", "hills"} -- Biomes where chickens can spawn
+        },
+        cow = {
+            spawn_rate = 0.008,     -- 0.8% chance per suitable tile (slightly rarer)
+            initial_spawn_count = 2, -- Number of cows to spawn initially
+            max_count = 3,          -- Maximum cows in world
+            respawn_time = 120,     -- Time in seconds to respawn a cow (longer than chickens)
+            biomes = {"grassland", "hills", "forest"} -- Biomes where cows can spawn
         }
     },
 
     -- Item spawn configuration
     items = {
         stick = {
-            spawn_rate = 0.08,      -- 8% chance per suitable tile
-            max_count = 50,         -- Maximum sticks in world
+            spawn_rate = 0.005,     -- 0.5% chance per suitable tile (much lower)
+            max_count = 8,          -- Maximum 8 sticks in world (just a few)
             biomes = {"grassland", "hills", "forest", "dark_forest"} -- Biomes where sticks can spawn
         }
     },

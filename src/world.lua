@@ -316,30 +316,25 @@ function world.drawEntityIcon(entity, camera, isInteractable, isTargeted, isHove
     
     -- Determine outline color based on state
     if isTargeted then
-        -- Red for attacking (within attack range), yellow for targeted but out of attack range
-        if distance <= constants.ATTACK_RANGE then
-            interaction_outline.draw(entity, worldX, worldY, {1, 0, 0}) -- Red for attacking
-        else
-            interaction_outline.draw(entity, worldX, worldY, {1, 1, 0}) -- Yellow for targeted but out of attack range
-        end
+        -- Red outline when player has this enemy as their combat target
+        interaction_outline.draw(entity, worldX, worldY, {1, 0, 0}) -- Red for player's combat target
     elseif isHovered then
         interaction_outline.draw(entity, worldX, worldY, {1, 1, 1}) -- White for hovered/interactable
-    elseif isInteractable then
-        interaction_outline.draw(entity, worldX, worldY, {1, 1, 1}) -- White for interactable
     end
 
     if entity.icon then
-        -- Draw the entity icon
+        -- Draw the entity icon using the entity's size property
         love.graphics.setColor(1, 1, 1, 1) -- White tint
-        local iconSize = 24 -- Size to draw the icon
+        local iconSize = entity.size or 24 -- Use entity's size, fallback to 24
         local scale = iconSize / 32 -- Scale from 32x32 icon to desired size
         love.graphics.draw(entity.icon, worldX, worldY, 0, scale, scale, 16, 16) -- Center the 32x32 icon
     else
-        -- Fallback: draw a simple shape
+        -- Fallback: draw a simple shape using entity size
         love.graphics.setColor(1, 1, 1, 1) -- White
-        love.graphics.circle("fill", worldX, worldY, 8) -- Simple white circle
-        love.graphics.setColor(0, 0, 0, 1) -- Black border
-        love.graphics.circle("line", worldX, worldY, 8)
+        local fallbackSize = (entity.size or 16) / 2 -- Use half of entity size for radius
+        love.graphics.circle("fill", worldX, worldY, fallbackSize)
+        love.graphics.setColor(0, 0, 0, 1) -- Black border  
+        love.graphics.circle("line", worldX, worldY, fallbackSize)
     end
 
     -- Reset color

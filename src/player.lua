@@ -46,6 +46,12 @@ function player.update(p, dt, isWalkable, isInWorld, movementTarget, attackRange
 
     -- Handle movement target (click-to-move only)
     if movementTarget then
+        -- If it's an attack target, update the target's position to the entity's current position
+        if movementTarget.isAttackTarget and movementTarget.targetEntity then
+            movementTarget.x = movementTarget.targetEntity.worldX
+            movementTarget.y = movementTarget.targetEntity.worldY
+        end
+
         -- Calculate direction to movement target
         local dx = movementTarget.x - p.x
         local dy = movementTarget.y - p.y
@@ -53,7 +59,8 @@ function player.update(p, dt, isWalkable, isInWorld, movementTarget, attackRange
 
         local stopDistance = 10
         if movementTarget.isAttackTarget then
-            stopDistance = attackRange or 75
+            local constants = require("src.constants")
+            stopDistance = constants.ATTACK_RANGE - 15 -- Stop 15 pixels before max range to ensure we're in range
         end
 
         -- Check if we've reached the target
@@ -127,14 +134,23 @@ function player.update(p, dt, isWalkable, isInWorld, movementTarget, attackRange
     end
 end
 
--- Pick up nearby items
+-- Pick up single item
 function player.pickupItem(p, groundItems, inventory, itemIndex)
     local item_to_pick_up = groundItems[itemIndex]
     if not item_to_pick_up then return end
 
     local inventory_module = require("src.inventory")
+    local ui = require("src.ui")
+    
     if inventory_module.addItem(inventory, item_to_pick_up.item) then
         table.remove(groundItems, itemIndex)
+        
+        -- Show pickup message
+        local itemName = item_to_pick_up.item.name or "Unknown Item"
+        local quantityText = (item_to_pick_up.item.count and item_to_pick_up.item.count > 1) and (" x" .. item_to_pick_up.item.count) or ""
+        ui.addChatMessage("Picked up " .. itemName .. quantityText, {0, 1, 0})
+    else
+        ui.addChatMessage("Cannot pick up item - inventory full", {1, 0.5, 0.5})
     end
 end
 
@@ -246,46 +262,6 @@ function player.drawHeldItem(x, y, item, scale)
     love.graphics.draw(item.icon, handX, handY, 0, itemSize/32, itemSize/32)
 end
 
--- New function to pickup entire item piles
-function player.pickupItemPile(p, groundItems, inventory, pile)
-    if not pile or not pile.items then return end
-    
-    local inventory_module = require("src.inventory")
-    local ui = require("src.ui")
-    local itemsPickedUp = 0
-    local itemsAttempted = #pile.items
-    
-    -- Try to pick up all items in the pile (iterate backwards to avoid index issues)
-    for i = #pile.items, 1, -1 do
-        local groundItem = pile.items[i]
-        
-        -- Find the index of this item in the main groundItems array
-        for j = #groundItems, 1, -1 do
-            if groundItems[j] == groundItem then
-                if inventory_module.addItem(inventory, groundItem.item) then
-                    table.remove(groundItems, j)
-                    itemsPickedUp = itemsPickedUp + 1
-                end
-                break
-            end
-        end
-    end
-    
-    -- Show pickup message
-    if itemsPickedUp > 0 then
-        if itemsPickedUp == itemsAttempted then
-            if itemsPickedUp == 1 then
-                ui.addChatMessage("Picked up item", {0, 1, 0})
-            else
-                ui.addChatMessage("Picked up all " .. itemsPickedUp .. " items", {0, 1, 0})
-            end
-        else
-            ui.addChatMessage("Picked up " .. itemsPickedUp .. "/" .. itemsAttempted .. " items (inventory full)", {1, 1, 0})
-        end
-    else
-        ui.addChatMessage("Cannot pick up items - inventory full", {1, 0.5, 0.5})
-    end
-end
 
 -- Respawn player
 function player.respawn(p, spawnX, spawnY)

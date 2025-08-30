@@ -481,7 +481,7 @@ function HotbarPanel:draw()
         local game = require("src.game")
         local gs = game.getState and game.getState() or nil
         if gs and gs.player and gs.player.selectedHotbarSlot == i then
-            love.graphics.setColor(1, 1, 0, 0.8)  -- Yellow highlight
+            love.graphics.setColor(1, 1, 1, 0.8)  -- White highlight
             love.graphics.setLineWidth(3)
             ui.drawRoundedRectOutline(slotX - 1, slotY - 1, slotW + 2, slotH + 2, 4)
             love.graphics.setLineWidth(1)

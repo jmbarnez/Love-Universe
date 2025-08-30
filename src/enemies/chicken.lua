@@ -11,10 +11,6 @@ local CHICKEN_SIZE = 8 -- Half size for proper scaling with larger player
 local CHICKEN_COLOR = {1.0, 1.0, 1.0} -- White color for cute chickens
 local CHICKEN_OUTLINE_COLOR = {0.8, 0.8, 0.8} -- Light gray outline
 local CHICKEN_HEALTH = 3 -- Reduced to 3 HP like RuneScape
-local CHICKEN_ATTACK_DAMAGE = 1 -- Chicken deals 1 damage
-local PLAYER_ATTACK_DAMAGE = 1 -- Player deals 1 damage per hit
-local CHICKEN_ATTACK_COOLDOWN = 2.0 -- 2 second cooldown between chicken attacks
-local CHICKEN_RETALIATION_DELAY = 1.0 -- 1 second delay before chicken retaliates
 
 -- Create a new chicken at specified world coordinates
 function chicken.create(worldX, worldY)
@@ -27,7 +23,6 @@ function chicken.create(worldX, worldY)
         color = CHICKEN_COLOR,
         outlineColor = CHICKEN_OUTLINE_COLOR,
         alive = true,
-        attackDamage = 1, -- Chicken deals 1 damage
         -- Entity info
         type = "chicken",
         name = "Chicken",
@@ -83,13 +78,14 @@ function chicken.createIcon()
     return canvas
 end
 
--- Update chicken (combat AI and timers)
+-- Update chicken (turn-based combat)
 function chicken.update(chick, dt, currentTime, playerX, playerY, player, onDamage, groundItems)
     if not chick.alive then return end
 
-    -- Use the new combat system
+    -- Update combat state for turn-based combat
     combat.update(chick, dt, currentTime, playerX, playerY, player, onDamage)
 
+    -- Check if chicken died
     if chick.health <= 0 and chick.alive then
         chicken.die(chick, groundItems)
     end
@@ -104,6 +100,8 @@ function chicken.die(chick, groundItems)
         chicken_skull = require("src.items.chicken_skull")
     }
 
+    -- Collect all items to drop first
+    local itemsToDrop = {}
     for _, drop in ipairs(chick.lootTable) do
         if love.math.random() <= drop.chance then
             local item_def = item_definitions[drop.item]
@@ -112,11 +110,25 @@ function chicken.die(chick, groundItems)
                 if num_items > 0 then
                     local item_drop = item_def.new()
                     item_drop.count = num_items
-                    -- Add slight vertical offset for items to appear above ground
-                    world.addGroundItem(groundItems, item_drop, chick.worldX, chick.worldY + 2, false) -- false = temporary
+                    table.insert(itemsToDrop, item_drop)
                 end
             end
         end
+    end
+    
+    -- Drop items in scattered positions around the death location
+    for i, item_drop in ipairs(itemsToDrop) do
+        local scatterRadius = 20 -- pixels to scatter items around death location
+        local angle = (i - 1) * (math.pi * 2 / #itemsToDrop) -- Evenly distribute around circle
+        local distance = love.math.random(5, scatterRadius) -- Random distance within radius
+        
+        local offsetX = math.cos(angle) * distance
+        local offsetY = math.sin(angle) * distance
+        
+        local dropX = chick.worldX + offsetX
+        local dropY = chick.worldY + offsetY
+        
+        world.addGroundItem(groundItems, item_drop, dropX, dropY, false) -- false = temporary
     end
 end
 
@@ -130,10 +142,21 @@ function chicken.canInteract(playerX, playerY, chick)
     return distance <= constants.INTERACTION_DISTANCE
 end
 
--- Attack a chicken (damage it)
+-- Attack a chicken (damage it) - DEPRECATED: Only used for manual debugging
+-- Normal combat should go through the turn-based combat.update system
 function chicken.attack(chick, player, currentTime, onDamage, groundItems)
     if not chick.alive then return false end
+    
+    -- Check if player is within attack range
+    local distance = lume.distance(chick.worldX, chick.worldY, player.x, player.y)
+    if distance > constants.ATTACK_RANGE then
+        return false -- Attack failed, player is too far away
+    end
 
+    -- This function should not be used for normal gameplay
+    -- It bypasses the turn-based system
+    print("WARNING: chicken.attack called - should use turn-based combat instead")
+    
     -- Use the new combat system for player attacks
     local died = combat.playerAttack(chick, player, currentTime, onDamage)
 

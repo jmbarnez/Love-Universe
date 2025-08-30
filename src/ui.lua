@@ -717,10 +717,6 @@ function ui.mousepressed(x, y, button)
     suit.mousepressed(x, y, button)
     
     -- Check if the click was over any UI element
-    -- Check ground item selection menu first (avoid circular dependency by checking directly)
-    if ui.handleGroundItemSelectionMenuClick and ui.handleGroundItemSelectionMenuClick(x, y, button) then
-        return true -- Selection menu consumed the click
-    end
 
 
     
@@ -767,8 +763,6 @@ function ui.mousepressed(x, y, button)
     return false -- UI did not consume the click
 end
 
--- Ground item selection menu handling (set by game module to avoid circular dependencies)
-ui.handleGroundItemSelectionMenuClick = nil
 
 
 

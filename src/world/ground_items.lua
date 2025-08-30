@@ -345,33 +345,40 @@ function ground_items.draw_outlines(ground_items_list, mouse_world_x, mouse_worl
         if distance <= check_radius then
             local item_count = #pile.items
 
+            -- Always draw square outline for consistency
+            local outline_size
             if item_count == 1 then
-                -- Single item - draw tight outline around icon
+                -- Single item - tight square outline around icon
                 local item = pile.items[1].item
                 local icon_size = item.icon and 24 or 20
-
-                love.graphics.setColor(1, 1, 0, 0.8) -- Yellow outline
-                love.graphics.rectangle("line",
-                    pile.centerX - icon_size/2 - 1,
-                    pile.centerY - icon_size/2 - 1,
-                    icon_size + 2,
-                    icon_size + 2)
+                outline_size = icon_size + 4 -- Small padding
             else
-                -- Multiple items - draw circular outline around the pile
-                local pile_radius = math.max(15, item_count * 3) -- Scale radius with item count
-                love.graphics.setColor(1, 1, 0, 0.8) -- Yellow outline
-                love.graphics.setLineWidth(2)
-                love.graphics.circle("line", pile.centerX, pile.centerY, pile_radius)
-                love.graphics.setLineWidth(1)
+                -- Multiple items - larger square outline around the pile
+                outline_size = math.max(30, item_count * 6) -- Scale size with item count
+            end
 
-                -- Draw item count indicator
+            love.graphics.setColor(1, 1, 1, 0.8) -- White outline
+            love.graphics.setLineWidth(2)
+            love.graphics.rectangle("line",
+                pile.centerX - outline_size/2,
+                pile.centerY - outline_size/2,
+                outline_size,
+                outline_size)
+            love.graphics.setLineWidth(1)
+
+            -- Draw item count indicator for multiple items
+            if item_count > 1 then
+                -- Position indicator at top-right corner of square
+                local indicator_x = pile.centerX + outline_size/2 - 5
+                local indicator_y = pile.centerY - outline_size/2 + 5
+                
                 love.graphics.setColor(1, 1, 1, 0.9)
-                love.graphics.circle("fill", pile.centerX + pile_radius - 5, pile.centerY - pile_radius + 5, 8)
+                love.graphics.circle("fill", indicator_x, indicator_y, 8)
                 love.graphics.setColor(0, 0, 0, 1)
                 local font = love.graphics.getFont()
                 local count_text = tostring(item_count)
                 local text_width = font:getWidth(count_text)
-                love.graphics.print(count_text, pile.centerX + pile_radius - 5 - text_width/2, pile.centerY - pile_radius + 5 - 6)
+                love.graphics.print(count_text, indicator_x - text_width/2, indicator_y - 6)
             end
 
             love.graphics.setColor(1, 1, 1) -- Reset color

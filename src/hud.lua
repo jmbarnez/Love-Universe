@@ -63,6 +63,7 @@ function hud.getTooltipTarget(gameState)
 
             for x = math.max(1, mouseTileX - checkRadius), math.min(tilesX, mouseTileX + checkRadius) do
                 for y = math.max(1, mouseTileY - checkRadius), math.min(tilesY, mouseTileY + checkRadius) do
+                    -- Check chickens
                     if gameState.chickens[x] and gameState.chickens[x][y] and gameState.chickens[x][y].alive then
                         local chick = gameState.chickens[x][y]
                         local distance = lume.distance(chick.worldX, chick.worldY, gameState.mouse.worldX, gameState.mouse.worldY)
@@ -70,6 +71,17 @@ function hud.getTooltipTarget(gameState)
                         -- If mouse is within reasonable distance of enemy
                         if distance <= chick.size + 20 then
                             return chick
+                        end
+                    end
+                    
+                    -- Check cows
+                    if gameState.cows[x] and gameState.cows[x][y] and gameState.cows[x][y].alive then
+                        local cow = gameState.cows[x][y]
+                        local distance = lume.distance(cow.worldX, cow.worldY, gameState.mouse.worldX, gameState.mouse.worldY)
+
+                        -- If mouse is within reasonable distance of enemy
+                        if distance <= cow.size + 20 then
+                            return cow
                         end
                     end
                 end
